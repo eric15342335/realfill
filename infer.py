@@ -77,7 +77,8 @@ if __name__ == "__main__":
     for idx in range(16):
         result = pipe(
             prompt="a photo of sks", image=image, mask_image=mask_image, 
-            num_inference_steps=200, guidance_scale=1, generator=generator, 
+            num_inference_steps=200, guidance_scale=1, generator=generator,
+            height=image.size[1], width=image.size[0],
         ).images[0]
         
         result = Image.composite(result, image, mask_image)
