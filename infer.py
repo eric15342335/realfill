@@ -68,8 +68,15 @@ if __name__ == "__main__":
     if args.seed is not None:
         generator = torch.Generator(device="cuda").manual_seed(args.seed)
 
-    image = Image.open(args.validation_image)
-    mask_image = Image.open(args.validation_mask)
+    try:
+        image = Image.open(args.validation_image).convert("RGB") # Ensure RGB
+        mask_image = Image.open(args.validation_mask).convert("L") # Ensure Grayscale
+    except FileNotFoundError:
+        print(f"Error: Cannot find image '{args.validation_image}' or mask '{args.validation_mask}'")
+        exit(1)
+    except Exception as e:
+        print(f"Error loading images: {e}")
+        exit(1)
 
     print(f"Original image size: {image.size}")
     print(f"Original mask size: {mask_image.size}")
