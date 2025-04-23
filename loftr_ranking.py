@@ -20,7 +20,6 @@ DEFAULT_LOFTR_MODEL = 'outdoor'
 DEFAULT_CONFIDENCE_THRESHOLD = 0.7
 DEFAULT_CACHE_FILENAME = '.loftr_match_cache.json'
 
-# --- LoFTRMatcher Class ---
 class LoFTRMatcher:
     """Handles LoFTR model loading, image comparison, and caching."""
     def __init__(self, model_type=DEFAULT_LOFTR_MODEL, confidence_threshold=DEFAULT_CONFIDENCE_THRESHOLD, device=None):
@@ -123,11 +122,12 @@ class LoFTRMatcher:
             self.cache[cache_key] = num_confident_matches # Store result in cache
             return num_confident_matches
         except Exception as e:
+            # Print more specific error during inference
             print(f"\n[LoFTRMatcher] ERROR during inference between {os.path.basename(path1)} & {os.path.basename(path2)}: {e}")
             return -1 # Indicate error
 
 
-# --- Ranking Function ---
+# --- Ranking Function (Keep as before) ---
 def rank_candidates_by_references(matcher, reference_paths, candidate_paths, cache_file_path):
     """Ranks candidates based on summed LoFTR matches against all references."""
     matcher.load_disk_cache(cache_file_path) # Load cache before starting
@@ -176,6 +176,7 @@ if __name__ == "__main__":
     print("-" * 30)
 
     # --- Validate Paths ---
+    # Use Path objects internally for consistency, but accept strings as args
     source_dir_path = Path(args.source_dir)
     ref_dir_path = Path(args.ref_dir)
     if not source_dir_path.is_dir():
@@ -202,22 +203,28 @@ if __name__ == "__main__":
     print(f"[Main] Need to select and copy {num_needed} new candidate(s).")
 
     # --- Find Candidates ---
+    candidate_paths = []
     try:
-        potential_files = [f for f in os.listdir(source_dir_path) if re.match(r"^\d+\.png$", f.name)]
-        potential_files.sort(key=lambda x: int(x.stem)) # Sort by number in filename
-        candidate_paths = [str(f.resolve()) for f in potential_files] # Get full paths
+        # List directory contents (filenames as strings)
+        all_files_in_source = os.listdir(source_dir_path)
+        # Filter for filenames matching the pattern "N.png"
+        potential_filenames = [fname for fname in all_files_in_source if re.match(r"^\d+\.png$", fname)]
+        # Sort filenames numerically based on the stem (name without extension)
+        potential_filenames.sort(key=lambda fname: int(os.path.splitext(fname)[0]))
+        # Construct full, absolute paths as strings
+        candidate_paths = [os.path.abspath(os.path.join(args.source_dir, fname)) for fname in potential_filenames]
     except Exception as e:
-        print(f"[Main] ERROR: Could not list or process candidate files in {source_dir_path}: {e}")
+        print(f"[Main] ERROR: Could not list or process candidate files in {args.source_dir}: {e}")
         exit(1)
 
     if not candidate_paths:
-        print(f"[Main] ERROR: No candidate images (e.g., 0.png) found in {source_dir_path}.")
+        print(f"[Main] ERROR: No candidate images (e.g., 0.png) found in {args.source_dir}.")
         exit(1)
     print(f"[Main] Found {len(candidate_paths)} potential candidates.")
 
     # --- Rank Candidates ---
     loftr_matcher = LoFTRMatcher(model_type=args.model_type, confidence_threshold=args.conf_threshold)
-    cache_file_path = str(source_dir_path / DEFAULT_CACHE_FILENAME)
+    cache_file_path = str(source_dir_path / DEFAULT_CACHE_FILENAME) # Use Path object to join
     ranked_scores = rank_candidates_by_references(loftr_matcher, original_ref_paths, candidate_paths, cache_file_path)
 
     if not ranked_scores:
@@ -233,8 +240,8 @@ if __name__ == "__main__":
     selected_candidate_paths = [path for score, path in ranked_scores[:num_to_select]]
 
     if num_to_select <= 0:
-         print("[Main] No candidates needed or selected.")
-         exit(0)
+        print("[Main] No candidates needed or selected.")
+        exit(0)
 
     print(f"\n[Main] Selected top {len(selected_candidate_paths)} candidates for copying.")
 
@@ -254,13 +261,13 @@ if __name__ == "__main__":
     copied_count = 0
     for i, src_path in enumerate(selected_candidate_paths):
         dst_filename = f"{next_available_index + i}.png"
-        dst_path = ref_dir_path / dst_filename
+        dst_path = ref_dir_path / dst_filename # Use Path object for destination
 
         if dst_path.exists():
             print(f"[Main] WARNING: Destination path '{dst_path}' already exists! Skipping.")
             continue
         try:
-            shutil.copy2(src_path, dst_path) # copy2 preserves metadata
+            shutil.copy2(src_path, str(dst_path)) # copy2 needs string path for dest
             print(f"  Copied '{os.path.basename(src_path)}' to '{dst_path}'")
             copied_count += 1
         except Exception as e:
