@@ -384,19 +384,19 @@ def parse_args(input_args=None):
     parser.add_argument(
         "--lora_rank",
         type=int,
-        default=16,
+        default=8, 
         help=("The dimension of the LoRA update matrices."),
     )
     parser.add_argument(
         "--lora_alpha",
         type=int,
-        default=27,
+        default=18, 
         help=("The alpha constant of the LoRA update matrices."),
     )
     parser.add_argument(
         "--lora_dropout",
         type=float,
-        default=0.0,
+        default=0.0, 
         help="The dropout rate of the LoRA update matrices.",
     )
     parser.add_argument(
