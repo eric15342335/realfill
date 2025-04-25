@@ -17,7 +17,7 @@ import argparse
 
 # --- Default Configuration ---
 DEFAULT_LOFTR_MODEL = 'outdoor'
-DEFAULT_CONFIDENCE_THRESHOLD = 0.7
+DEFAULT_CONFIDENCE_THRESHOLD = 0.9
 DEFAULT_CACHE_FILENAME = '.loftr_match_cache.json'
 
 class LoFTRMatcher:
