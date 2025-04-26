@@ -1,6 +1,7 @@
 # benchmarks.py
 
 import argparse
+import os
 import re
 import json
 import subprocess
@@ -12,8 +13,6 @@ import numpy as np
 from tqdm import tqdm
 
 # --- Configuration & Constants ---
-# Metrics: Name -> (Script Name, Higher is Better?)
-# Note: DreamSim/LPIPS are distances (lower is better)
 METRICS_CONFIG = OrderedDict(
     [
         ("PSNR", ("psnr_metric.py", True)),
@@ -25,44 +24,27 @@ METRICS_CONFIG = OrderedDict(
     ]
 )
 
-# LoFTR Filtering Rates (Percentage to filter *out*)
-LOFTR_FILTER_RATES = [0.0, 0.25, 0.50, 0.75]  # 0%, 25%, 50%, 75%
+LOFTR_FILTER_RATES = [0.0, 0.25, 0.50, 0.75]
 
-DEFAULT_NUM_IMAGES = 16  # Standard number of images per result set
+DEFAULT_NUM_IMAGES = 16
 MASTER_CACHE_FILENAME = "master_results_cache.json"
 PER_IMAGE_CACHE_BASE = "per_scene_cache"
-LOFTR_RANKING_FILENAME = "loftr_ranking_scores.json"  # Output from loftr_ranking.py --rank-only
+LOFTR_RANKING_FILENAME = "loftr_ranking_scores.json"
 
 # --- Helper Functions ---
 
 
 def find_gt_mask_paths(results_dir_path, dataset_dirs_map):
-    """
-    Find corresponding GT and Mask paths for a results directory,
-    using a map of benchmark types to their dataset locations.
-
-    Args:
-        results_dir_path (Path): Path object for the results directory.
-        dataset_dirs_map (dict): Dictionary mapping benchmark type (str, e.g., "RealBench")
-                                 to its base dataset directory (Path).
-
-    Returns:
-        tuple: (str path to gt, str path to mask) or (None, None) if not found.
-    """
     dir_name = results_dir_path.name
-    # Examples: RealBench-15-results, Custom-35-results-fp32, RealBench-24-results-generated
     match = re.match(r"^(RealBench|Custom)-(\d+)(-results.*)?$", dir_name)
     if not match:
-        # Try matching model folders if needed
         match = re.match(r"^(RealBench|Custom)-(\d+)(-model.*)?$", dir_name)
         if not match:
-            # print(f"Warning: Could not parse benchmark/number from directory name: {dir_name}")
             return None, None
 
-    benchmark_type = match.group(1)  # "RealBench" or "Custom"
-    scene_number = match.group(2)  # "15", "35", "24"
+    benchmark_type = match.group(1)
+    scene_number = match.group(2)
 
-    # Look up the base directory for this benchmark type
     dataset_base_dir = dataset_dirs_map.get(benchmark_type)
     if not dataset_base_dir:
         print(
@@ -75,26 +57,19 @@ def find_gt_mask_paths(results_dir_path, dataset_dirs_map):
         )
         return None, None
 
-    # Construct the path within the specific dataset directory
-    # Assumes structure: <dataset_base_dir>/<benchmark_type>/<scene_number>/target/...
     base_path = dataset_base_dir / benchmark_type / scene_number / "target"
-
     gt_path = base_path / "gt.png"
     mask_path = base_path / "mask.png"
 
-    # Check if files actually exist
     if not gt_path.is_file():
-        # print(f"Warning: Ground truth file not found at {gt_path}") # Can be noisy
         return None, None
     if not mask_path.is_file():
-        # print(f"Warning: Mask file not found at {mask_path}")
         return None, None
 
     return str(gt_path), str(mask_path)
 
 
 def parse_final_score(stdout_str):
-    """Extracts the score from the 'FINAL_SCORE:...' line."""
     for line in stdout_str.splitlines():
         if line.startswith("FINAL_SCORE:"):
             score_part = line.split(":", 1)[1]
@@ -105,12 +80,10 @@ def parse_final_score(stdout_str):
             except ValueError:
                 print(f"Warning: Could not parse score from line: {line}")
                 return None
-    # print(f"Warning: FINAL_SCORE line not found in output:\n{stdout_str}")
     return None
 
 
 def load_json_cache(file_path):
-    """Safely loads a JSON file."""
     if not file_path or not Path(file_path).is_file():
         return None
     try:
@@ -122,7 +95,6 @@ def load_json_cache(file_path):
 
 
 def save_json_cache(data, file_path):
-    """Saves data to a JSON file."""
     try:
         Path(file_path).parent.mkdir(parents=True, exist_ok=True)
         with open(file_path, "w") as f:
@@ -132,7 +104,6 @@ def save_json_cache(data, file_path):
 
 
 def get_scene_key(folder_name):
-    """Extracts the base scene identifier (e.g., RealBench-15) from a folder name."""
     match = re.match(r"^(RealBench|Custom)-(\d+)", folder_name)
     if match:
         return f"{match.group(1)}-{match.group(2)}"
@@ -146,8 +117,6 @@ class BenchmarkRunner:
     def __init__(self, args):
         self.args = args
         self.base_results_dir = Path(args.results_base_dir)
-
-        # Store the mapping of dataset types to their locations
         self.dataset_dirs_map = {}
         if args.realbench_dataset_dir:
             self.dataset_dirs_map["RealBench"] = Path(args.realbench_dataset_dir)
@@ -161,18 +130,15 @@ class BenchmarkRunner:
         self.cache_dir = Path(args.cache_dir)
         self.output_file = Path(args.output_file) if args.output_file else None
         self.num_images = args.num_images
-        self.force_recalc_metrics = args.force_recalc or []  # Ensure it's a list
+        self.force_recalc_metrics = args.force_recalc or []
         self.metrics_to_run = args.metrics or list(METRICS_CONFIG.keys())
         self.loftr_script_path = Path(args.loftr_script_path)
-
         self.master_cache_path = self.cache_dir / MASTER_CACHE_FILENAME
         self.per_image_cache_dir = self.cache_dir / PER_IMAGE_CACHE_BASE
-
-        # Results storage
         self.discovered_folders = []
-        self.master_results = defaultdict(dict)  # {folder_name: {metric: score}}
-        self.per_image_scores = defaultdict(lambda: defaultdict(dict))  # {folder: {metric: {img_name: score}}}
-        self.loftr_ranks = defaultdict(list)  # {folder_name: [img_name_rank1, img_name_rank2,...]}
+        self.master_results = defaultdict(dict)
+        self.per_image_scores = defaultdict(lambda: defaultdict(dict))
+        self.loftr_ranks = defaultdict(list)
 
         print("Benchmark Runner Initialized.")
         print(f"Results Base Dir: {self.base_results_dir}")
@@ -181,7 +147,6 @@ class BenchmarkRunner:
         print(f"Metrics to run: {self.metrics_to_run}")
 
     def discover_folders(self):
-        """Scan results base dir for relevant folders."""
         print(f"\nScanning for result folders in {self.base_results_dir}...")
         self.discovered_folders = []
         if not self.base_results_dir.is_dir():
@@ -202,7 +167,6 @@ class BenchmarkRunner:
         print(f"Found {len(self.discovered_folders)} relevant result folders with mapped datasets.")
 
     def load_master_cache(self):
-        """Load existing average scores from master cache."""
         print(f"Loading master cache: {self.master_cache_path}")
         cached_data = load_json_cache(self.master_cache_path)
         if cached_data and isinstance(cached_data, dict):
@@ -213,12 +177,10 @@ class BenchmarkRunner:
             self.master_results = defaultdict(dict)
 
     def save_master_cache(self):
-        """Save current average scores to master cache."""
         print(f"Saving master cache: {self.master_cache_path}")
         save_json_cache(self.master_results, self.master_cache_path)
 
     def run_metric_script(self, metric_name, script_path, gt_path, mask_path, results_dir):
-        """Executes a single metric script using subprocess."""
         command = [
             "python",
             str(script_path),
@@ -254,7 +216,6 @@ class BenchmarkRunner:
             return None
 
     def run_all_metrics(self):
-        """Run metric scripts for all discovered folders."""
         if not self.discovered_folders:
             print("No folders discovered. Cannot run metrics.")
             return
@@ -303,7 +264,6 @@ class BenchmarkRunner:
         print("--- Metric Execution Finished ---")
 
     def load_per_image_results(self, folder_name, metric_name):
-        """Load per-image scores from the specific metric's cache file."""
         if folder_name in self.per_image_scores and metric_name in self.per_image_scores[folder_name]:
             return self.per_image_scores[folder_name][metric_name]
 
@@ -319,14 +279,17 @@ class BenchmarkRunner:
             return None
 
     def run_loftr_ranking(self):
-        """Runs LoFTR ranking script for relevant folders if needed for filtering."""
         if not self.loftr_script_path.is_file():
             print("LoFTR script not found. Skipping LoFTR ranking.")
             return
 
         print("\n--- Running LoFTR Ranking ---")
-        folders_to_rank = [f for f in self.discovered_folders if "generated" not in f.name and "fp32" not in f.name]
-        print(f"Will attempt LoFTR ranking for {len(folders_to_rank)} folders.")
+        folders_to_rank = [
+            f
+            for f in self.discovered_folders
+            if f.name.startswith("RealBench") and "generated" not in f.name and "fp32" not in f.name
+        ]
+        print(f"Will attempt LoFTR ranking for {len(folders_to_rank)} RealBench FP16 non-generated folders.")
 
         for folder_path in tqdm(folders_to_rank, desc="LoFTR Ranking"):
             folder_name = folder_path.name
@@ -372,10 +335,13 @@ class BenchmarkRunner:
         print("--- LoFTR Ranking Finished ---")
 
     def load_loftr_ranks(self):
-        """Load the results of the LoFTR ranking runs."""
         print("Loading LoFTR ranking results...")
         self.loftr_ranks = defaultdict(list)
-        folders_ranked = [f for f in self.discovered_folders if "generated" not in f.name and "fp32" not in f.name]
+        folders_ranked = [
+            f
+            for f in self.discovered_folders
+            if f.name.startswith("RealBench") and "generated" not in f.name and "fp32" not in f.name
+        ]
         loaded_count = 0
         for folder_path in folders_ranked:
             folder_name = folder_path.name
@@ -387,7 +353,6 @@ class BenchmarkRunner:
         print(f"Loaded LoFTR ranks for {loaded_count} folders.")
 
     def analyze_results(self):
-        """Perform comparisons and aggregations."""
         if not self.master_results:
             print("No metric results available for analysis.")
             return {}
@@ -406,7 +371,7 @@ class BenchmarkRunner:
         analysis["overall_realbench_fp16_nongen"] = self._calculate_average(realbench_fp16_nongen_folders)
         analysis["overall_custom"] = self._calculate_average(custom_folders)
 
-        # --- 2. FP16 vs FP32 (RealBench only, uses all valid folders to build maps) ---
+        # --- 2. FP16 vs FP32 (RealBench only) ---
         fp16_map = {
             get_scene_key(f): f
             for f in valid_folders
@@ -428,7 +393,7 @@ class BenchmarkRunner:
             else "No common FP16/FP32 scenes found."
         )
 
-        # --- 3. Generated vs Non-Generated (RealBench only, uses all valid folders to build maps) ---
+        # --- 3. Generated vs Non-Generated (RealBench only) ---
         non_gen_map = {
             get_scene_key(f): f
             for f in valid_folders
@@ -450,8 +415,8 @@ class BenchmarkRunner:
             else "No common Generated/Non-Generated scenes found."
         )
 
-        # --- 4. LoFTR Filtering Analysis (Uses RealBench FP16 Non-Gen as baseline) ---
-        run_loftr = any("loftr" in str(a).lower() for a in analysis.keys()) or True
+        # --- 4. LoFTR Filtering Analysis (Uses ALL RealBench FP16 Non-Gen as baseline) ---
+        run_loftr = True  # Assume always needed if LoFTR metrics are potentially displayed
         if run_loftr and self.loftr_script_path.is_file():
             self.run_loftr_ranking()
             self.load_loftr_ranks()
@@ -459,13 +424,20 @@ class BenchmarkRunner:
             print("Skipping LoFTR analysis as script was not found.")
 
         loftr_analysis = defaultdict(lambda: defaultdict(dict))
-        base_folders_for_loftr = non_gen_common if common_scenes_gen_keys else list(non_gen_map.values())
+        # Use ALL FP16 non-generated RealBench folders for this analysis
+        base_folders_for_loftr = [
+            folder_path.name
+            for folder_path in self.discovered_folders
+            if folder_path.name in realbench_fp16_nongen_folders
+        ]
 
         if not base_folders_for_loftr or not self.loftr_ranks:
             print("No base folders or LoFTR ranks available for LoFTR filtering analysis.")
             analysis["loftr_filtering"] = "Skipped (no base folders or ranks)"
         else:
-            print(f"Performing LoFTR filtering analysis on {len(base_folders_for_loftr)} base scenes.")
+            print(
+                f"Performing LoFTR filtering analysis on {len(base_folders_for_loftr)} RealBench FP16 non-generated scenes."
+            )
             for rate in LOFTR_FILTER_RATES:
                 num_to_keep = max(1, int(self.num_images * (1.0 - rate)))
                 rate_key = f"{int(rate*100)}%"
@@ -478,6 +450,8 @@ class BenchmarkRunner:
                         ranked_filenames = self.loftr_ranks.get(folder_name)
 
                         if img_scores is None or ranked_filenames is None:
+                            # Skip folder for this metric if scores or ranks are missing
+                            # print(f"Skipping {folder_name} for {metric_name} @ {rate_key} (missing data)")
                             continue
 
                         valid_scores = [
@@ -486,6 +460,8 @@ class BenchmarkRunner:
                         top_scores = valid_scores[:num_to_keep]
 
                         if not top_scores:
+                            # Skip folder for this metric if no valid scores remain after filtering
+                            # print(f"Skipping {folder_name} for {metric_name} @ {rate_key} (no valid scores left)")
                             continue
 
                         avg_score_filtered = np.mean(top_scores)
@@ -495,6 +471,8 @@ class BenchmarkRunner:
                     if metric_scores_for_rate:
                         overall_avg_for_rate_metric = np.mean(metric_scores_for_rate)
                         loftr_analysis[rate_key][metric_name] = overall_avg_for_rate_metric
+                    # else: # Don't record if no folders contributed for this metric/rate combo
+                    #     print(f"No valid scores found for {metric_name} @ {rate_key}")
 
             analysis["loftr_filtering"] = dict(loftr_analysis)
 
@@ -502,7 +480,6 @@ class BenchmarkRunner:
         return analysis
 
     def _calculate_average(self, folder_list):
-        """Helper to calculate average scores across a list of folders."""
         if not folder_list:
             return {}
         avg_scores = defaultdict(list)
@@ -523,7 +500,6 @@ class BenchmarkRunner:
         return final_avg
 
     def format_results(self, analysis_results):
-        """Formats the analysis results into strings/tables."""
         output_lines = []
         pd.set_option("display.precision", 4)
 
@@ -589,7 +565,7 @@ class BenchmarkRunner:
             output_lines.append(f"{gen_comp}")
 
         loftr_res = analysis_results.get("loftr_filtering")
-        output_lines.append("\n\n--- LoFTR Filtering Analysis (Based on RealBench FP16 Non-Generated) ---")
+        output_lines.append("\n\n--- LoFTR Filtering Analysis (Based on ALL RealBench FP16 Non-Generated) ---")
         if isinstance(loftr_res, dict) and loftr_res:
             sorted_rates = sorted(loftr_res.keys(), key=lambda x: int(x.replace("%", "")))
             df_loftr_raw = pd.DataFrame(loftr_res)[sorted_rates]
@@ -608,7 +584,6 @@ class BenchmarkRunner:
         return "\n".join(output_lines)
 
     def run(self):
-        """Main execution flow."""
         self.discover_folders()
         self.run_all_metrics()
         analysis = self.analyze_results()
@@ -647,7 +622,6 @@ if __name__ == "__main__":
     parser.add_argument(
         "--custom_dataset_dir", help="Path to the base directory for Custom dataset (e.g., /content/jensen_images)."
     )
-
     parser.add_argument("--output_file", help="Optional path to save the final formatted report.")
     parser.add_argument(
         "--num_images",
