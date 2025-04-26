@@ -8,22 +8,18 @@ import os
 device = device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 model, preprocess = dreamsim(pretrained=True, device=device)
 
-def dream(img1, img2, mask):
-	mask[mask == 0] = 254
-	mask[mask == 255] = 0
-	mask[mask == 254] = 255
-	distance = model(img1*mask, img2*mask)
+def dream(img1, img2):
+	distance = model(img1, img2)
 	return distance
 
 def main(m):
 	try:
 		original  = preprocess(Image.open(rf"C:\Users\Jensen\Documents\APAI3010\Project\realfill_data_release_full\RealBench-gen\{m}\target\gt.png")).to(device)
-		mask = preprocess(Image.open(rf"C:\Users\Jensen\Documents\APAI3010\Project\realfill_data_release_full\RealBench-gen\{m}\target\mask.png")).to(device)
 		if original is None or mask is None:
-			print (f"Warning: Could not read ground truth or mask for folder {m}. Skipping.")
+			print (f"Warning: Could not read ground truth for folder {m}. Skipping.")
 			return 0
 	except FileNotFoundError:
-		print(f"Warning: Ground truth not found or mask not found for folder {m}. Skipping.")
+		print(f"Warning: Ground truth not found for folder {m}. Skipping.")
 		return 0
 	
 	value = 0
