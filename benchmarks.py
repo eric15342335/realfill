@@ -1,7 +1,6 @@
 # benchmarks.py
 
 import argparse
-import os
 import re
 import json
 import subprocess
@@ -78,9 +77,6 @@ def find_gt_mask_paths(results_dir_path, dataset_dirs_map):
 
     # Construct the path within the specific dataset directory
     # Assumes structure: <dataset_base_dir>/<benchmark_type>/<scene_number>/target/...
-    # Note: We use benchmark_type *again* here because the folders inside
-    # realfill_data_release_full are named RealBench/ and Custom/,
-    # and inside jensen_images it might be Custom/ as well.
     base_path = dataset_base_dir / benchmark_type / scene_number / "target"
 
     gt_path = base_path / "gt.png"
@@ -194,7 +190,6 @@ class BenchmarkRunner:
 
         for item in self.base_results_dir.iterdir():
             if item.is_dir() and re.match(r"^(RealBench|Custom)-\d+(-results.*)?$", item.name):
-                # Check if we have a dataset mapping for this type
                 benchmark_type = re.match(r"^(RealBench|Custom)", item.name).group(1)
                 if benchmark_type in self.dataset_dirs_map:
                     self.discovered_folders.append(item)
@@ -203,7 +198,7 @@ class BenchmarkRunner:
                         f"Skipping folder {item.name} as no dataset directory was provided for type '{benchmark_type}'."
                     )
 
-        self.discovered_folders.sort(key=lambda p: p.name)  # Sort for consistent order
+        self.discovered_folders.sort(key=lambda p: p.name)
         print(f"Found {len(self.discovered_folders)} relevant result folders with mapped datasets.")
 
     def load_master_cache(self):
@@ -234,7 +229,7 @@ class BenchmarkRunner:
             "--results_dir",
             str(results_dir),
             "--cache_dir",
-            str(self.cache_dir),  # Pass the main cache dir
+            str(self.cache_dir),
             "--num_images",
             str(self.num_images),
         ]
@@ -243,7 +238,6 @@ class BenchmarkRunner:
             if process.returncode != 0:
                 print(f"Error running {metric_name} script for {results_dir.name}.")
                 print("Stderr:", process.stderr)
-                # print("Stdout:", process.stdout) # Often less useful than stderr
                 return None
 
             score = parse_final_score(process.stdout)
@@ -266,15 +260,13 @@ class BenchmarkRunner:
             return
 
         print("\n--- Running Metrics ---")
-        self.load_master_cache()  # Load existing results first
+        self.load_master_cache()
 
         for folder_path in tqdm(self.discovered_folders, desc="Processing Folders"):
             folder_name = folder_path.name
-            # Use the dataset map here
             gt_path, mask_path = find_gt_mask_paths(folder_path, self.dataset_dirs_map)
 
             if not gt_path or not mask_path:
-                # find_gt_mask_paths already printed a warning if needed
                 print(f"Skipping metrics for folder {folder_name}: Could not find GT/Mask files.")
                 continue
 
@@ -289,7 +281,6 @@ class BenchmarkRunner:
                     print(f"Warning: Metric script not found: {metric_script_path}. Skipping {metric_name}.")
                     continue
 
-                # Check cache and force_recalc
                 force_this = "all" in self.force_recalc_metrics or metric_name.lower() in self.force_recalc_metrics
 
                 if (
@@ -297,27 +288,25 @@ class BenchmarkRunner:
                     and metric_name in self.master_results[folder_name]
                     and self.master_results[folder_name][metric_name] is not None
                 ):
-                    # print(f"Skipping {metric_name} for {folder_name} (cached in master).")
-                    continue  # Skip if valid score already exists and not forcing
+                    continue
 
                 if force_this:
                     print(f"Force recalculating {metric_name} for {folder_name}...")
 
                 avg_score = self.run_metric_script(metric_name, metric_script_path, gt_path, mask_path, folder_path)
 
-                self.master_results[folder_name][metric_name] = avg_score  # Store score or None if failed
+                self.master_results[folder_name][metric_name] = avg_score
                 if avg_score is None:
                     print(f"Failed to get score for {metric_name} on {folder_name}")
 
-        self.save_master_cache()  # Save at the end
+        self.save_master_cache()
         print("--- Metric Execution Finished ---")
 
     def load_per_image_results(self, folder_name, metric_name):
         """Load per-image scores from the specific metric's cache file."""
         if folder_name in self.per_image_scores and metric_name in self.per_image_scores[folder_name]:
-            return self.per_image_scores[folder_name][metric_name]  # Already loaded
+            return self.per_image_scores[folder_name][metric_name]
 
-        # Determine cache subfolder (masked or not)
         is_masked = metric_name in ["PSNR", "SSIM", "LPIPS"]
         cache_subfolder = metric_name.lower() + "_masked" if is_masked else metric_name.lower()
         cache_file = self.per_image_cache_dir / cache_subfolder / f"{folder_name}.json"
@@ -336,7 +325,6 @@ class BenchmarkRunner:
             return
 
         print("\n--- Running LoFTR Ranking ---")
-        # Rank standard results folders for which we have datasets
         folders_to_rank = [f for f in self.discovered_folders if "generated" not in f.name and "fp32" not in f.name]
         print(f"Will attempt LoFTR ranking for {len(folders_to_rank)} folders.")
 
@@ -344,15 +332,12 @@ class BenchmarkRunner:
             folder_name = folder_path.name
             loftr_output_json = folder_path / LOFTR_RANKING_FILENAME
 
-            # Find GT path to determine the reference dir location
             gt_path, _ = find_gt_mask_paths(folder_path, self.dataset_dirs_map)
             if not gt_path:
                 print(f"Skipping LoFTR for {folder_name}: Cannot determine base path (no GT found).")
                 continue
 
-            # Determine the reference directory used during training/copying
-            # This assumes the 'ref' folder exists within the scene's structure in the dataset dir
-            scene_base_path = Path(gt_path).parent.parent  # e.g., .../RealBench/15 or .../Custom/35
+            scene_base_path = Path(gt_path).parent.parent
             ref_dir = scene_base_path / "ref"
 
             if not ref_dir.is_dir():
@@ -361,7 +346,6 @@ class BenchmarkRunner:
                 )
                 continue
 
-            # Ensure source dir (results folder) exists
             if not folder_path.is_dir():
                 print(f"ERROR: Source directory {folder_path} does not exist for LoFTR ranking. Skipping.")
                 continue
@@ -376,12 +360,9 @@ class BenchmarkRunner:
                 "--rank-only",
             ]
             try:
-                # print(f"\nRunning LoFTR for {folder_name}...")
                 process = subprocess.run(command, capture_output=True, text=True, check=False, timeout=600)
                 if process.returncode != 0:
                     print(f"Error running LoFTR script for {folder_name}.")
-                # else:
-                #    print(f"LoFTR ranking finished for {folder_name}.") # Can be verbose
 
             except subprocess.TimeoutExpired:
                 print(f"Timeout expired running LoFTR script for {folder_name}")
@@ -393,7 +374,7 @@ class BenchmarkRunner:
     def load_loftr_ranks(self):
         """Load the results of the LoFTR ranking runs."""
         print("Loading LoFTR ranking results...")
-        self.loftr_ranks = defaultdict(list)  # Clear previous loads if any
+        self.loftr_ranks = defaultdict(list)
         folders_ranked = [f for f in self.discovered_folders if "generated" not in f.name and "fp32" not in f.name]
         loaded_count = 0
         for folder_path in folders_ranked:
@@ -414,20 +395,25 @@ class BenchmarkRunner:
         print("\n--- Analyzing Results ---")
         analysis = {}
 
-        # Filter master results to only include folders for which datasets were found/processed
         valid_folders = list(self.master_results.keys())
 
         # --- 1. Overall Averages ---
-        realbench_folders = [f for f in valid_folders if f.startswith("RealBench")]
+        realbench_fp16_nongen_folders = [
+            f for f in valid_folders if f.startswith("RealBench") and "fp32" not in f and "generated" not in f
+        ]
         custom_folders = [f for f in valid_folders if f.startswith("Custom")]
 
-        analysis["overall_realbench"] = self._calculate_average(realbench_folders)
+        analysis["overall_realbench_fp16_nongen"] = self._calculate_average(realbench_fp16_nongen_folders)
         analysis["overall_custom"] = self._calculate_average(custom_folders)
 
-        # --- 2. FP16 vs FP32 (RealBench only, for simplicity) ---
-        fp16_map = {get_scene_key(f): f for f in realbench_folders if "fp32" not in f and "generated" not in f}
-        fp32_map = {get_scene_key(f): f for f in realbench_folders if "fp32" in f}
-        common_scenes_fp_keys = sorted([key for key in fp16_map if key in fp32_map])  # Sort keys
+        # --- 2. FP16 vs FP32 (RealBench only, uses all valid folders to build maps) ---
+        fp16_map = {
+            get_scene_key(f): f
+            for f in valid_folders
+            if f.startswith("RealBench") and "fp32" not in f and "generated" not in f
+        }
+        fp32_map = {get_scene_key(f): f for f in valid_folders if f.startswith("RealBench") and "fp32" in f}
+        common_scenes_fp_keys = sorted([key for key in fp16_map if key in fp32_map])
 
         fp16_common = [fp16_map[key] for key in common_scenes_fp_keys]
         fp32_common = [fp32_map[key] for key in common_scenes_fp_keys]
@@ -442,11 +428,14 @@ class BenchmarkRunner:
             else "No common FP16/FP32 scenes found."
         )
 
-        # --- 3. Generated vs Non-Generated (RealBench only) ---
-        # Base = fp16 non-gen
-        non_gen_map = {get_scene_key(f): f for f in realbench_folders if "generated" not in f and "fp32" not in f}
-        gen_map = {get_scene_key(f): f for f in realbench_folders if "generated" in f}
-        common_scenes_gen_keys = sorted([key for key in non_gen_map if key in gen_map])  # Sort keys
+        # --- 3. Generated vs Non-Generated (RealBench only, uses all valid folders to build maps) ---
+        non_gen_map = {
+            get_scene_key(f): f
+            for f in valid_folders
+            if f.startswith("RealBench") and "generated" not in f and "fp32" not in f
+        }
+        gen_map = {get_scene_key(f): f for f in valid_folders if f.startswith("RealBench") and "generated" in f}
+        common_scenes_gen_keys = sorted([key for key in non_gen_map if key in gen_map])
 
         non_gen_common = [non_gen_map[key] for key in common_scenes_gen_keys]
         gen_common = [gen_map[key] for key in common_scenes_gen_keys]
@@ -461,17 +450,15 @@ class BenchmarkRunner:
             else "No common Generated/Non-Generated scenes found."
         )
 
-        # --- 4. LoFTR Filtering Analysis (RealBench FP16 Non-Gen only) ---
-        # Run LoFTR only if needed for analysis and script exists
-        run_loftr = any("loftr" in str(a).lower() for a in analysis.keys()) or True  # Assume needed for now
+        # --- 4. LoFTR Filtering Analysis (Uses RealBench FP16 Non-Gen as baseline) ---
+        run_loftr = any("loftr" in str(a).lower() for a in analysis.keys()) or True
         if run_loftr and self.loftr_script_path.is_file():
-            self.run_loftr_ranking()  # Ensure ranks are generated
-            self.load_loftr_ranks()  # Load ranks into self.loftr_ranks
+            self.run_loftr_ranking()
+            self.load_loftr_ranks()
         elif run_loftr:
             print("Skipping LoFTR analysis as script was not found.")
 
-        loftr_analysis = defaultdict(lambda: defaultdict(dict))  # {rate: {metric: avg_score}}
-        # Use the common non-gen scenes if available, otherwise all non-gen fp16
+        loftr_analysis = defaultdict(lambda: defaultdict(dict))
         base_folders_for_loftr = non_gen_common if common_scenes_gen_keys else list(non_gen_map.values())
 
         if not base_folders_for_loftr or not self.loftr_ranks:
@@ -493,7 +480,6 @@ class BenchmarkRunner:
                         if img_scores is None or ranked_filenames is None:
                             continue
 
-                        # Get scores for top N valid images
                         valid_scores = [
                             img_scores[f] for f in ranked_filenames if f in img_scores and img_scores[f] is not None
                         ]
@@ -533,14 +519,13 @@ class BenchmarkRunner:
         for metric, scores in avg_scores.items():
             if scores:
                 final_avg[metric] = np.mean(scores)
-        # Add counts for context
         final_avg["_counts"] = {m: valid_folders_per_metric.get(m, 0) for m in self.metrics_to_run if m in final_avg}
         return final_avg
 
     def format_results(self, analysis_results):
         """Formats the analysis results into strings/tables."""
         output_lines = []
-        pd.set_option("display.precision", 4)  # Set pandas precision
+        pd.set_option("display.precision", 4)
 
         output_lines.append("=" * 80)
         output_lines.append("                          Benchmark Results Summary")
@@ -560,10 +545,14 @@ class BenchmarkRunner:
             df = pd.DataFrame([data]).T
             df.columns = ["Average"]
             df["Count"] = df.index.map(lambda x: counts.get(x, 0))
+            df = df.reindex(list(METRICS_CONFIG.keys())).dropna(how="all")
             return [f"\n--- {title} ---", df.to_string()]
 
         output_lines.extend(
-            format_avg_table(analysis_results.get("overall_realbench", {}), "Overall Average (RealBench)")
+            format_avg_table(
+                analysis_results.get("overall_realbench_fp16_nongen", {}),
+                "Overall Average (RealBench FP16 Non-Generated)",
+            )
         )
         output_lines.extend(format_avg_table(analysis_results.get("overall_custom", {}), "Overall Average (Custom)"))
 
@@ -578,6 +567,7 @@ class BenchmarkRunner:
             df_fp = pd.DataFrame({"FP16": fp_comp["fp16_avg"], "FP32": fp_comp["fp32_avg"]})
             df_fp["Count_FP16"] = df_fp.index.map(lambda x: fp16_counts.get(x, 0))
             df_fp["Count_FP32"] = df_fp.index.map(lambda x: fp32_counts.get(x, 0))
+            df_fp = df_fp.reindex(list(METRICS_CONFIG.keys())).dropna(how="all")
             output_lines.append(df_fp.to_string())
         else:
             output_lines.append(f"{fp_comp}")
@@ -593,17 +583,17 @@ class BenchmarkRunner:
             df_gen = pd.DataFrame({"Non-Generated": gen_comp["nongen_avg"], "Generated (LoFTR)": gen_comp["gen_avg"]})
             df_gen["Count_NonGen"] = df_gen.index.map(lambda x: nongen_counts.get(x, 0))
             df_gen["Count_Gen"] = df_gen.index.map(lambda x: gen_counts.get(x, 0))
+            df_gen = df_gen.reindex(list(METRICS_CONFIG.keys())).dropna(how="all")
             output_lines.append(df_gen.to_string())
         else:
             output_lines.append(f"{gen_comp}")
 
         loftr_res = analysis_results.get("loftr_filtering")
-        output_lines.append("\n\n--- LoFTR Filtering Analysis (RealBench Non-Gen FP16 Common Scenes) ---")
+        output_lines.append("\n\n--- LoFTR Filtering Analysis (Based on RealBench FP16 Non-Generated) ---")
         if isinstance(loftr_res, dict) and loftr_res:
-            # Ensure columns are sorted by filter rate percentage
             sorted_rates = sorted(loftr_res.keys(), key=lambda x: int(x.replace("%", "")))
-            df_loftr_raw = pd.DataFrame(loftr_res)[sorted_rates]  # Rates as columns
-            df_loftr = df_loftr_raw.reindex(list(METRICS_CONFIG.keys())).dropna(how="all")  # Metrics as rows, sorted
+            df_loftr_raw = pd.DataFrame(loftr_res)[sorted_rates]
+            df_loftr = df_loftr_raw.reindex(list(METRICS_CONFIG.keys())).dropna(how="all")
             output_lines.append(df_loftr.to_string())
         else:
             output_lines.append(f"{loftr_res}")
@@ -611,7 +601,7 @@ class BenchmarkRunner:
         output_lines.append("\n" + "=" * 80)
         output_lines.append("\nMetric Direction:")
         for name, (_, higher_is_better) in METRICS_CONFIG.items():
-            if name in self.metrics_to_run:  # Only show direction for metrics that were run
+            if name in self.metrics_to_run:
                 output_lines.append(f"  {name}: {'Higher' if higher_is_better else 'Lower'} is better")
         output_lines.append("=" * 80)
 
@@ -640,7 +630,6 @@ class BenchmarkRunner:
 # --- Command Line Interface ---
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run and analyze RealFill benchmarks.")
-    # Required Paths
     parser.add_argument(
         "--results_base_dir",
         required=True,
@@ -651,7 +640,6 @@ if __name__ == "__main__":
         required=True,
         help="Path to the directory for storing benchmark cache files (e.g., /content/drive/MyDrive/RealFill/benchmark_cache).",
     )
-    # Dataset Paths (At least one required)
     parser.add_argument(
         "--realbench_dataset_dir",
         help="Path to the base directory for RealBench dataset (e.g., /content/realfill_data_release_full).",
@@ -660,7 +648,6 @@ if __name__ == "__main__":
         "--custom_dataset_dir", help="Path to the base directory for Custom dataset (e.g., /content/jensen_images)."
     )
 
-    # Optional Paths & Config
     parser.add_argument("--output_file", help="Optional path to save the final formatted report.")
     parser.add_argument(
         "--num_images",
@@ -678,7 +665,6 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    # --- Validations ---
     if not Path(args.results_base_dir).is_dir():
         parser.error(f"Results base directory not found: {args.results_base_dir}")
     if not args.realbench_dataset_dir and not args.custom_dataset_dir:
@@ -687,14 +673,11 @@ if __name__ == "__main__":
         )
     if args.realbench_dataset_dir and not Path(args.realbench_dataset_dir).is_dir():
         print(f"WARNING: RealBench dataset directory not found: {args.realbench_dataset_dir}")
-        # Allow running without it if only Custom is needed
     if args.custom_dataset_dir and not Path(args.custom_dataset_dir).is_dir():
         print(f"WARNING: Custom dataset directory not found: {args.custom_dataset_dir}")
-        # Allow running without it if only RealBench is needed
     if not Path(args.loftr_script_path).is_file():
         print(f"WARNING: LoFTR script not found at {args.loftr_script_path}. LoFTR filtering analysis will be skipped.")
 
-    # Ensure cache directory exists
     Path(args.cache_dir).mkdir(parents=True, exist_ok=True)
     (Path(args.cache_dir) / PER_IMAGE_CACHE_BASE).mkdir(parents=True, exist_ok=True)
 
