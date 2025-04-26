@@ -88,21 +88,21 @@ def main(m):
     total_ssim = 0
     count = 0
     for i in range(16):
-        compressed_path = os.path.join(results_path, f"{i}.png")
-        compressed = cv2.imread(compressed_path, cv2.IMREAD_COLOR)
-        if compressed is not None:
-            ssim_value = calculate_ssim_filled(original, compressed, mask)
+        generated_path = os.path.join(results_path, f"{i}.png")
+        generated = cv2.imread(generated_path, cv2.IMREAD_COLOR)
+        if generated is not None:
+            ssim_value = calculate_ssim_filled(original, generated, mask)
             total_ssim += ssim_value
             count += 1
         else:
-            print(f"Warning: Could not read compressed image {i}.png in folder {m}.")
+            print(f"Warning: Could not read generated image {i}.png in folder {m}.")
 
     if count > 0:
         avg_ssim = total_ssim / count
         print(f"SSIM value for folder {m} (filled regions) is {avg_ssim} ")
         return avg_ssim
     else:
-        print(f"No valid compressed images found for folder {m}.")
+        print(f"No valid generated images found for folder {m}.")
         return 0
 
 m_limit = 22
