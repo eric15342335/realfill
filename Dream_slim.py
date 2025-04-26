@@ -31,7 +31,7 @@ def main(m):
 				print (f"Warning: Could not read ground truth for folder {m}. Skipping.")
 		except  FileNotFoundError:
 			print(f"Warning: Ground truth not found for folder {m}. Skipping.")
-		value += dream(original, result, mask)
+		value += dream(original, result)
 		count += 1
 	if count > 0:
 		print(f"Dreamsim value for folder{m} is {value/count}")
