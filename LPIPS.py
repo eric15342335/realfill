@@ -44,25 +44,25 @@ def main(m):
     total_lpips = 0
     count = 0
     for i in range(16):
-        compressed_path = os.path.join(results_path, f"{i}.png")
-        compressed = cv2.imread(compressed_path, 1)
-        if compressed is not None:
-            compressed = cv2.cvtColor(compressed, cv2.COLOR_BGR2RGB)
-            compressed = cv2.resize(compressed, (512, 512))
-            compressed_tensor = transform(compressed).unsqueeze(0)
-            compressed_tensor = (compressed_tensor * 2) - 1
-            lpips_value = LPIPS_filled(original_tensor, compressed_tensor, mask_resized)
+        generated_path = os.path.join(results_path, f"{i}.png")
+        generated = cv2.imread(generated_path, 1)
+        if generated is not None:
+            generated = cv2.cvtColor(generated, cv2.COLOR_BGR2RGB)
+            generated = cv2.resize(generated, (512, 512))
+            generated_tensor = transform(generated).unsqueeze(0)
+            generated_tensor = (generated_tensor * 2) - 1
+            lpips_value = LPIPS_filled(original_tensor, generated_tensor, mask_resized)
             total_lpips += lpips_value
             count += 1
         else:
-            print(f"Warning: Could not read compressed image {i}.png in folder {m}.")
+            print(f"Warning: Could not read generated image {i}.png in folder {m}.")
 
     if count > 0:
         avg_lpips = total_lpips / count
         print(f"LPIPS value for folder {m} (filled regions) is {avg_lpips}")
         return avg_lpips
     else:
-        print(f"No valid compressed images found for folder {m}.")
+        print(f"No valid generated images found for folder {m}.")
         return 0
 
 m_limit = 22
