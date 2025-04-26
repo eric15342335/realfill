@@ -54,6 +54,6 @@ for m in range(m_limit):
 		validfolders += 1
 if validfolders > 0:
     overall_avg_lpips = total / validfolders
-    print(f"Average LPIPS value (filled regions) across {validfolders} folders is {overall_avg_lpips}")
+    print(f"Average Dreamsim value (filled regions) across {validfolders} folders is {overall_avg_lpips}")
 else:
-    print("No valid folders found to calculate the average LPIPS.")
+    print("No valid folders found to calculate the average Dreamsim.")
