@@ -372,25 +372,47 @@ class BenchmarkRunner:
         analysis["overall_custom"] = self._calculate_average(custom_folders)
 
         # --- 2. FP16 vs FP32 (RealBench only) ---
-        fp16_map = {
+        fp16_map_rb = {
             get_scene_key(f): f
             for f in valid_folders
             if f.startswith("RealBench") and "fp32" not in f and "generated" not in f
         }
-        fp32_map = {get_scene_key(f): f for f in valid_folders if f.startswith("RealBench") and "fp32" in f}
-        common_scenes_fp_keys = sorted([key for key in fp16_map if key in fp32_map])
+        fp32_map_rb = {get_scene_key(f): f for f in valid_folders if f.startswith("RealBench") and "fp32" in f}
+        common_scenes_fp_keys_rb = sorted([key for key in fp16_map_rb if key in fp32_map_rb])
 
-        fp16_common = [fp16_map[key] for key in common_scenes_fp_keys]
-        fp32_common = [fp32_map[key] for key in common_scenes_fp_keys]
+        fp16_common_rb = [fp16_map_rb[key] for key in common_scenes_fp_keys_rb]
+        fp32_common_rb = [fp32_map_rb[key] for key in common_scenes_fp_keys_rb]
 
-        analysis["fp16_vs_fp32"] = (
+        analysis["fp16_vs_fp32_realbench"] = (
             {
-                "common_scenes": common_scenes_fp_keys,
-                "fp16_avg": self._calculate_average(fp16_common),
-                "fp32_avg": self._calculate_average(fp32_common),
+                "common_scenes": common_scenes_fp_keys_rb,
+                "fp16_avg": self._calculate_average(fp16_common_rb),
+                "fp32_avg": self._calculate_average(fp32_common_rb),
             }
-            if common_scenes_fp_keys
-            else "No common FP16/FP32 scenes found."
+            if common_scenes_fp_keys_rb
+            else "No common RealBench FP16/FP32 scenes found."
+        )
+
+        # --- 2b. FP16 vs FP32 (Custom only) ---
+        fp16_map_custom = {
+            get_scene_key(f): f
+            for f in valid_folders
+            if f.startswith("Custom") and "fp32" not in f and "generated" not in f
+        }
+        fp32_map_custom = {get_scene_key(f): f for f in valid_folders if f.startswith("Custom") and "fp32" in f}
+        common_scenes_fp_keys_custom = sorted([key for key in fp16_map_custom if key in fp32_map_custom])
+
+        fp16_common_custom = [fp16_map_custom[key] for key in common_scenes_fp_keys_custom]
+        fp32_common_custom = [fp32_map_custom[key] for key in common_scenes_fp_keys_custom]
+
+        analysis["fp16_vs_fp32_custom"] = (
+            {
+                "common_scenes": common_scenes_fp_keys_custom,
+                "fp16_avg": self._calculate_average(fp16_common_custom),
+                "fp32_avg": self._calculate_average(fp32_common_custom),
+            }
+            if common_scenes_fp_keys_custom
+            else "No common Custom FP16/FP32 scenes found."
         )
 
         # --- 3. Generated vs Non-Generated (RealBench only) ---
@@ -416,7 +438,7 @@ class BenchmarkRunner:
         )
 
         # --- 4. LoFTR Filtering Analysis (Uses ALL RealBench FP16 Non-Gen as baseline) ---
-        run_loftr = True  # Assume always needed if LoFTR metrics are potentially displayed
+        run_loftr = True
         if run_loftr and self.loftr_script_path.is_file():
             self.run_loftr_ranking()
             self.load_loftr_ranks()
@@ -424,11 +446,10 @@ class BenchmarkRunner:
             print("Skipping LoFTR analysis as script was not found.")
 
         loftr_analysis = defaultdict(lambda: defaultdict(dict))
-        # Use ALL FP16 non-generated RealBench folders for this analysis
         base_folders_for_loftr = [
             folder_path.name
             for folder_path in self.discovered_folders
-            if folder_path.name in realbench_fp16_nongen_folders
+            if folder_path.name in realbench_fp16_nongen_folders  # Use the list identified in section 1
         ]
 
         if not base_folders_for_loftr or not self.loftr_ranks:
@@ -450,8 +471,6 @@ class BenchmarkRunner:
                         ranked_filenames = self.loftr_ranks.get(folder_name)
 
                         if img_scores is None or ranked_filenames is None:
-                            # Skip folder for this metric if scores or ranks are missing
-                            # print(f"Skipping {folder_name} for {metric_name} @ {rate_key} (missing data)")
                             continue
 
                         valid_scores = [
@@ -460,8 +479,6 @@ class BenchmarkRunner:
                         top_scores = valid_scores[:num_to_keep]
 
                         if not top_scores:
-                            # Skip folder for this metric if no valid scores remain after filtering
-                            # print(f"Skipping {folder_name} for {metric_name} @ {rate_key} (no valid scores left)")
                             continue
 
                         avg_score_filtered = np.mean(top_scores)
@@ -471,8 +488,6 @@ class BenchmarkRunner:
                     if metric_scores_for_rate:
                         overall_avg_for_rate_metric = np.mean(metric_scores_for_rate)
                         loftr_analysis[rate_key][metric_name] = overall_avg_for_rate_metric
-                    # else: # Don't record if no folders contributed for this metric/rate combo
-                    #     print(f"No valid scores found for {metric_name} @ {rate_key}")
 
             analysis["loftr_filtering"] = dict(loftr_analysis)
 
@@ -513,10 +528,10 @@ class BenchmarkRunner:
         output_lines.append("-" * 80)
 
         def format_avg_table(data, title):
-            if not data or "_counts" not in data:
+            if not isinstance(data, dict) or not data or "_counts" not in data:
                 return [f"\n--- {title} ---", "No data available."]
             counts = data.pop("_counts", {})
-            if not data:
+            if not data:  # Check again after pop
                 return [f"\n--- {title} ---", "No data available."]
             df = pd.DataFrame([data]).T
             df.columns = ["Average"]
@@ -532,21 +547,38 @@ class BenchmarkRunner:
         )
         output_lines.extend(format_avg_table(analysis_results.get("overall_custom", {}), "Overall Average (Custom)"))
 
-        fp_comp = analysis_results.get("fp16_vs_fp32")
+        fp_comp_rb = analysis_results.get("fp16_vs_fp32_realbench")
         output_lines.append("\n\n--- FP16 vs FP32 Comparison (Common RealBench Scenes) ---")
-        if isinstance(fp_comp, dict):
+        if isinstance(fp_comp_rb, dict):
             output_lines.append(
-                f"Common Scenes ({len(fp_comp['common_scenes'])}): {', '.join(fp_comp['common_scenes'])}"
+                f"Common Scenes ({len(fp_comp_rb['common_scenes'])}): {', '.join(fp_comp_rb['common_scenes'])}"
             )
-            fp16_counts = fp_comp["fp16_avg"].pop("_counts", {})
-            fp32_counts = fp_comp["fp32_avg"].pop("_counts", {})
-            df_fp = pd.DataFrame({"FP16": fp_comp["fp16_avg"], "FP32": fp_comp["fp32_avg"]})
+            fp16_counts = fp_comp_rb["fp16_avg"].pop("_counts", {})
+            fp32_counts = fp_comp_rb["fp32_avg"].pop("_counts", {})
+            df_fp = pd.DataFrame({"FP16": fp_comp_rb["fp16_avg"], "FP32": fp_comp_rb["fp32_avg"]})
             df_fp["Count_FP16"] = df_fp.index.map(lambda x: fp16_counts.get(x, 0))
             df_fp["Count_FP32"] = df_fp.index.map(lambda x: fp32_counts.get(x, 0))
             df_fp = df_fp.reindex(list(METRICS_CONFIG.keys())).dropna(how="all")
             output_lines.append(df_fp.to_string())
         else:
-            output_lines.append(f"{fp_comp}")
+            output_lines.append(f"{fp_comp_rb}")
+
+        # Add the new table for Custom FP16 vs FP32
+        fp_comp_custom = analysis_results.get("fp16_vs_fp32_custom")
+        output_lines.append("\n\n--- FP16 vs FP32 Comparison (Common Custom Scenes) ---")
+        if isinstance(fp_comp_custom, dict):
+            output_lines.append(
+                f"Common Scenes ({len(fp_comp_custom['common_scenes'])}): {', '.join(fp_comp_custom['common_scenes'])}"
+            )
+            fp16_counts_c = fp_comp_custom["fp16_avg"].pop("_counts", {})
+            fp32_counts_c = fp_comp_custom["fp32_avg"].pop("_counts", {})
+            df_fp_c = pd.DataFrame({"FP16": fp_comp_custom["fp16_avg"], "FP32": fp_comp_custom["fp32_avg"]})
+            df_fp_c["Count_FP16"] = df_fp_c.index.map(lambda x: fp16_counts_c.get(x, 0))
+            df_fp_c["Count_FP32"] = df_fp_c.index.map(lambda x: fp32_counts_c.get(x, 0))
+            df_fp_c = df_fp_c.reindex(list(METRICS_CONFIG.keys())).dropna(how="all")
+            output_lines.append(df_fp_c.to_string())
+        else:
+            output_lines.append(f"{fp_comp_custom}")
 
         gen_comp = analysis_results.get("gen_vs_nongen")
         output_lines.append("\n\n--- Generated vs Non-Generated Comparison (Common RealBench Scenes) ---")
