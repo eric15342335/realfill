@@ -47,6 +47,12 @@ This repo serves as the backup of the [Realfill unofficial implementation](https
     ```
 
 3. **Install Dependencies:**
+
+    > ⚠️ **Warning:**  
+    > The `requirements.txt` file will install the **CPU-only** version of PyTorch (`torch`).  
+    > If you want to use GPU acceleration (CUDA), you must manually install the appropriate GPU-enabled version of PyTorch.  
+    > See the [official PyTorch installation guide](https://pytorch.org/get-started/locally/) for instructions specific to your system and CUDA version.
+
     * For **Training and Inference**, use the primary requirements file:
 
         ```bash
