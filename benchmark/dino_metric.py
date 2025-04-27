@@ -11,12 +11,13 @@ from torch.nn import functional as F
 from transformers import ViTModel
 from tqdm import tqdm
 import time
+import traceback # Added for better error logging
 
 # --- Constants ---
 DEFAULT_NUM_IMAGES = 16
 CACHE_VERSION = "1.0"  # Increment if caching logic changes
 
-# --- DINO Transforms ---
+# --- DINO Transforms (Define globally, they are lightweight) ---
 try:
     # Standard DINOv1/v2 transforms (ViT-S/16 from facebook/dino-vits16 expects 224)
     T = transforms.Compose(
@@ -32,21 +33,47 @@ except Exception as e:
     print(f"Error defining transforms: {e}")
     T = None
 
-# --- Model Loading (Load once) ---
-try:
-    print("Loading DINO model (facebook/dino-vits16)...")
-    # Using ViT-S/16 as in the original script
-    model = ViTModel.from_pretrained("facebook/dino-vits16")
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model.to(device)
-    model.eval()  # Set to evaluation mode
-    print(f"DINO model loaded on {device}.")
-except Exception as e:
-    print(f"Error loading DINO model: {e}")
-    model = None
-
+# --- Model Variables (Initialize to None) ---
+model = None
+device = None
+model_loaded = False # Flag to track loading state
 
 # --- Helper Functions ---
+
+def _load_model_if_needed():
+    """Loads the DINO model once, only when needed."""
+    global model, device, model_loaded
+    if model_loaded:
+        return True # Already loaded successfully
+
+    if model is not None and device is not None:
+        model_loaded = True # Should be caught by flag, but safe check
+        return True
+
+    print("Attempting to load DINO model (facebook/dino-vits16)...")
+    try:
+        # Using ViT-S/16 as in the original script
+        _model = ViTModel.from_pretrained("facebook/dino-vits16")
+        _device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        _model.to(_device)
+        _model.eval()  # Set to evaluation mode
+
+        # Assign to global variables only after successful loading
+        model = _model
+        device = _device
+        model_loaded = True
+        print(f"DINO model loaded successfully on {device}.")
+        return True
+    except Exception as e:
+        print(f"FATAL Error loading DINO model: {e}")
+        traceback.print_exc()
+        # Ensure globals remain None on failure
+        model = None
+        device = None
+        model_loaded = False
+        return False
+
+
 def get_modification_time(file_path):
     """Gets the modification time of a file."""
     try:
@@ -57,8 +84,9 @@ def get_modification_time(file_path):
 
 def calculate_dino_similarity(img_path1, img_path2, model, transform, device):
     """Calculates DINO CLS token cosine similarity between two images."""
+    # Safeguard checks inside the loop
     if not model or not transform:
-        print("DINO model/transform not loaded/defined. Cannot calculate similarity.")
+        print("DINO model/transform not available during similarity calculation.")
         return 0.0
 
     try:
@@ -76,8 +104,6 @@ def calculate_dino_similarity(img_path1, img_path2, model, transform, device):
             outputs = model(inputs)
 
         # Extract CLS tokens
-        # For ViTModel from transformers, the output is a BaseModelOutputWithPooling or similar
-        # Use last_hidden_state[:, 0] for CLS token
         last_hidden_states = outputs.last_hidden_state
         emb_img1 = last_hidden_states[0, 0]  # CLS token for image 1
         emb_img2 = last_hidden_states[1, 0]  # CLS token for image 2
@@ -90,11 +116,11 @@ def calculate_dino_similarity(img_path1, img_path2, model, transform, device):
         print(f"Warning: Could not find image file: {img_path1} or {img_path2}")
         return 0.0
     except RuntimeError as e:
-        # Catch potential shape mismatches *after* transforms if PIL fails strangely
         print(f"RuntimeError during DINO calculation for {Path(img_path1).name}/{Path(img_path2).name}: {e}")
         return 0.0
     except Exception as e:
         print(f"Error calculating DINO similarity between {Path(img_path1).name} and {Path(img_path2).name}: {e}")
+        # traceback.print_exc() # Optional
         return 0.0
 
 
@@ -159,30 +185,22 @@ def save_cache(cache_file, data, gt_mtime, mask_mtime):
 def calculate_scene_dino(gt_path_str, mask_path_str, results_dir_str, cache_dir_str, num_images=DEFAULT_NUM_IMAGES):
     """
     Calculates the average DINO CLS token similarity for a given scene.
-
-    Args:
-        gt_path_str (str): Path to the ground truth image.
-        mask_path_str (str): Path to the mask image (not used by DINO but for cache validation).
-        results_dir_str (str): Path to the directory containing result images (0.png, 1.png, ...).
-        cache_dir_str (str): Path to the base directory for caching.
-        num_images (int): Number of result images to process.
-
-    Returns:
-        float: The average DINO similarity score, or None on error.
+    Loads the model only if needed.
     """
     gt_path = Path(gt_path_str)
     mask_path = Path(mask_path_str)
     results_dir = Path(results_dir_str)
     cache_dir = Path(cache_dir_str)
 
+    # --- Input Validation ---
     if not gt_path.is_file():
         print(f"Error: Ground truth image not found at {gt_path}")
         return None
     if not results_dir.is_dir():
         print(f"Error: Results directory not found at {results_dir}")
         return None
-    if not model or not T:
-        print("Error: DINO model or transforms not loaded/defined. Cannot proceed.")
+    if T is None: # Check if transforms loaded
+        print("Error: DINO transforms failed to define. Cannot proceed.")
         return None
 
     results_dir_name = results_dir.name
@@ -195,6 +213,11 @@ def calculate_scene_dino(gt_path_str, mask_path_str, results_dir_str, cache_dir_
     if cached_results:
         return cached_results.get("average")
 
+    # --- Model Loading (Only if needed) ---
+    if not _load_model_if_needed():
+        print("Error: Failed to load DINO model. Cannot proceed.")
+        return None
+
     # --- Calculation ---
     print(f"Calculating DINO for scene: {results_dir_name}")
     total_similarity = 0.0
@@ -206,8 +229,10 @@ def calculate_scene_dino(gt_path_str, mask_path_str, results_dir_str, cache_dir_
 
     if not image_files:
         print(f"Warning: No valid result images (0..{num_images-1}.png) found in {results_dir}")
+        save_cache(cache_file, {"average": 0.0, "per_image": {}, "count": 0}, gt_mtime, mask_mtime)
         return 0.0
 
+    # Pass loaded model, T, device to helper
     for i in tqdm(range(num_images), desc=f"DINO Processing {results_dir_name}", leave=False):
         result_img_name = f"{i}.png"
         result_img_path = results_dir / result_img_name
@@ -218,15 +243,17 @@ def calculate_scene_dino(gt_path_str, mask_path_str, results_dir_str, cache_dir_
                 total_similarity += similarity
                 per_image_scores[result_img_name] = similarity
                 valid_image_count += 1
-            # else:
-            #     print(f"Skipping DINO for {result_img_name} due to error.")
+            else:
+                 print(f"Skipping DINO for {result_img_name} due to error (returned None).")
+                 per_image_scores[result_img_name] = None # Mark error
 
-        # else:
-        #     print(f"Warning: Result image {result_img_name} not found in {results_dir}")
-        #     per_image_scores[result_img_name] = None
+        else:
+            # print(f"Warning: Result image {result_img_name} not found in {results_dir}")
+            per_image_scores[result_img_name] = None
 
     if valid_image_count == 0:
         print(f"Error: No valid result images processed for DINO similarity in {results_dir}")
+        save_cache(cache_file, {"average": None, "per_image": per_image_scores, "count": 0}, gt_mtime, mask_mtime)
         return None
 
     average_similarity = total_similarity / valid_image_count
@@ -260,6 +287,7 @@ if __name__ == "__main__":
     dino_cache_dir = Path(args.cache_dir) / "per_scene_cache" / "dino"
     dino_cache_dir.mkdir(parents=True, exist_ok=True)
 
+    # calculate_scene_dino will handle model loading internally
     avg_score = calculate_scene_dino(args.gt_path, args.mask_path, args.results_dir, args.cache_dir, args.num_images)
 
     if avg_score is not None:

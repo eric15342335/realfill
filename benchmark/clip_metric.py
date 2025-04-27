@@ -9,28 +9,57 @@ from PIL import Image
 from transformers import CLIPProcessor, CLIPModel
 from tqdm import tqdm
 import time
+import traceback # Added for better error logging
 
 # --- Constants ---
 DEFAULT_NUM_IMAGES = 16
 CACHE_VERSION = "1.0"  # Increment if caching logic changes
 
-# --- Model Loading (Load once) ---
-try:
-    print("Loading CLIP model and processor...")
-    # Consider using a specific version if reproducibility is critical
-    model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32")
-    processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model.to(device)
-    model.eval()  # Set to evaluation mode
-    print(f"CLIP model loaded on {device}.")
-except Exception as e:
-    print(f"Error loading CLIP model: {e}")
-    model = None
-    processor = None
-
+# --- Model Variables (Initialize to None) ---
+model = None
+processor = None
+device = None
+model_loaded = False # Flag to track loading state
 
 # --- Helper Functions ---
+
+def _load_model_if_needed():
+    """Loads the CLIP model and processor once, only when needed."""
+    global model, processor, device, model_loaded
+    if model_loaded:
+        return True # Already loaded successfully
+
+    if model is not None and processor is not None and device is not None:
+        model_loaded = True # Already loaded (perhaps by another call, unlikely here but safe)
+        return True
+
+    print("Attempting to load CLIP model and processor...")
+    try:
+        # Consider using a specific version if reproducibility is critical
+        _model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32")
+        _processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
+        _device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        _model.to(_device)
+        _model.eval()  # Set to evaluation mode
+
+        # Assign to global variables only after successful loading
+        model = _model
+        processor = _processor
+        device = _device
+        model_loaded = True
+        print(f"CLIP model loaded successfully on {device}.")
+        return True
+    except Exception as e:
+        print(f"FATAL Error loading CLIP model: {e}")
+        traceback.print_exc()
+        # Ensure globals remain None on failure
+        model = None
+        processor = None
+        device = None
+        model_loaded = False
+        return False
+
+
 def get_modification_time(file_path):
     """Gets the modification time of a file."""
     try:
@@ -41,13 +70,19 @@ def get_modification_time(file_path):
 
 def calculate_clip_similarity(img_path1, img_path2, model, processor, device):
     """Calculates CLIP cosine similarity between two images."""
+    # This check remains as a safeguard within the loop
     if not model or not processor:
-        print("CLIP model/processor not loaded. Cannot calculate similarity.")
+        print("CLIP model/processor not available during similarity calculation.")
         return 0.0
 
     try:
         image1 = Image.open(img_path1).convert("RGB")
         image2 = Image.open(img_path2).convert("RGB")
+
+        # Ensure processor and device are valid before use
+        if processor is None or device is None:
+             print("CLIP processor or device is None during similarity calculation.")
+             return 0.0
 
         inputs1 = processor(images=image1, return_tensors="pt", padding=True, truncation=True).to(device)
         inputs2 = processor(images=image2, return_tensors="pt", padding=True, truncation=True).to(device)
@@ -69,6 +104,7 @@ def calculate_clip_similarity(img_path1, img_path2, model, processor, device):
         return 0.0  # Or handle as an error
     except Exception as e:
         print(f"Error calculating CLIP similarity between {Path(img_path1).name} and {Path(img_path2).name}: {e}")
+        # traceback.print_exc() # Optional: more detail
         return 0.0  # Or raise
 
 
@@ -97,8 +133,6 @@ def load_cache(cache_file, gt_mtime_current, mask_mtime_current):
             print(f"Cache file {cache_file} format invalid or version mismatch. Recalculating.")
             return None
 
-        # Check modification times (optional but recommended)
-        # Note: Checking result dir mtime might be simpler but less robust if only GT changes
         if gt_mtime_current and cache_data["metadata"].get("gt_mtime") != gt_mtime_current:
             print(f"Ground truth mtime changed for {cache_file.name}. Recalculating.")
             return None
@@ -136,30 +170,19 @@ def save_cache(cache_file, data, gt_mtime, mask_mtime):
 def calculate_scene_clip(gt_path_str, mask_path_str, results_dir_str, cache_dir_str, num_images=DEFAULT_NUM_IMAGES):
     """
     Calculates the average CLIP similarity for a given scene (results directory).
-
-    Args:
-        gt_path_str (str): Path to the ground truth image.
-        mask_path_str (str): Path to the mask image (not used by CLIP but needed for cache validation consistency).
-        results_dir_str (str): Path to the directory containing result images (0.png, 1.png, ...).
-        cache_dir_str (str): Path to the base directory for caching.
-        num_images (int): Number of result images to process (0 to num_images-1).
-
-    Returns:
-        float: The average CLIP similarity score for the scene, or None if an error occurs.
+    Loads the model only if needed.
     """
     gt_path = Path(gt_path_str)
     mask_path = Path(mask_path_str)  # Included for consistency
     results_dir = Path(results_dir_str)
     cache_dir = Path(cache_dir_str)
 
+    # --- Input Validation ---
     if not gt_path.is_file():
         print(f"Error: Ground truth image not found at {gt_path}")
         return None
     if not results_dir.is_dir():
         print(f"Error: Results directory not found at {results_dir}")
-        return None
-    if not model or not processor:
-        print("Error: CLIP model not loaded. Cannot proceed.")
         return None
 
     results_dir_name = results_dir.name
@@ -172,24 +195,28 @@ def calculate_scene_clip(gt_path_str, mask_path_str, results_dir_str, cache_dir_
     if cached_results:
         return cached_results.get("average")  # Return cached average
 
+    # --- Model Loading (Only if needed) ---
+    if not _load_model_if_needed():
+        print("Error: Failed to load CLIP model. Cannot proceed.")
+        return None # Model loading failed
+
     # --- Calculation ---
     print(f"Calculating CLIP for scene: {results_dir_name}")
     total_similarity = 0.0
     valid_image_count = 0
     per_image_scores = {}
 
-    # Pre-load and process the ground truth image once
-    # (This is slightly inefficient as CLIP recalculates features, but keeps code simple)
-    # A more optimized version would cache the GT features if running many scenes.
-
     image_files = sorted([p for p in results_dir.glob("*.png") if p.stem.isdigit()], key=lambda x: int(x.stem))
     image_files = image_files[:num_images]  # Limit to the first num_images
 
     if not image_files:
         print(f"Warning: No valid result images (0..{num_images-1}.png) found in {results_dir}")
-        return 0.0  # Or None
+        # Save empty cache to prevent recalculation attempts on invalid folders
+        save_cache(cache_file, {"average": 0.0, "per_image": {}, "count": 0}, gt_mtime, mask_mtime)
+        return 0.0 # Or None, depending on desired behavior for empty folders
 
     # Use tqdm for progress bar
+    # Pass the now loaded model, processor, device to the helper
     for i in tqdm(range(num_images), desc=f"CLIP Processing {results_dir_name}", leave=False):
         result_img_name = f"{i}.png"
         result_img_path = results_dir / result_img_name
@@ -200,15 +227,17 @@ def calculate_scene_clip(gt_path_str, mask_path_str, results_dir_str, cache_dir_
                 total_similarity += similarity
                 per_image_scores[result_img_name] = similarity
                 valid_image_count += 1
-            # else: # Handle calculation error if needed
-            #     print(f"Skipping image {result_img_name} due to calculation error.")
+            else: # Handle calculation error if needed
+                 print(f"Skipping image {result_img_name} due to calculation error (returned None).")
+                 per_image_scores[result_img_name] = None # Mark as error in per-image results
 
-        # else: # Optional: Warn about missing specific image numbers
-        #     print(f"Warning: Result image {result_img_name} not found in {results_dir}")
-        #     per_image_scores[result_img_name] = None # Mark as missing
+        else: # Optional: Warn about missing specific image numbers
+            # print(f"Warning: Result image {result_img_name} not found in {results_dir}")
+            per_image_scores[result_img_name] = None # Mark as missing
 
     if valid_image_count == 0:
         print(f"Error: No valid result images processed for CLIP similarity in {results_dir}")
+        save_cache(cache_file, {"average": None, "per_image": per_image_scores, "count": 0}, gt_mtime, mask_mtime)
         return None
 
     average_similarity = total_similarity / valid_image_count
@@ -252,6 +281,7 @@ if __name__ == "__main__":
     clip_cache_dir = Path(args.cache_dir) / "per_scene_cache" / "clip"
     clip_cache_dir.mkdir(parents=True, exist_ok=True)
 
+    # calculate_scene_clip will handle model loading internally if needed
     avg_score = calculate_scene_clip(args.gt_path, args.mask_path, args.results_dir, args.cache_dir, args.num_images)
 
     if avg_score is not None:

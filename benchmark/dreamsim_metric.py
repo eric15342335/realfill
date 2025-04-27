@@ -13,36 +13,63 @@ import traceback  # Import traceback for better error printing
 # Ensure the dreamsim library is installed: pip install dreamsim
 try:
     from dreamsim import dreamsim as dreamsim_model_loader
+    dreamsim_available = True
 except ImportError:
     print("Error: dreamsim library not found. Please install it: pip install dreamsim")
     dreamsim_model_loader = None
+    dreamsim_available = False
 
 # --- Constants ---
 DEFAULT_NUM_IMAGES = 16
 CACHE_VERSION = "1.1"  # Keep incremented cache version
 
-# --- Model Loading (Load once) ---
+# --- Model Variables (Initialize to None) ---
 model = None
 preprocess = None
 device = None
-if dreamsim_model_loader:
+model_loaded = False # Flag to track loading state
+
+# --- Helper Functions ---
+
+def _load_model_if_needed():
+    """Loads the DreamSim model once, only when needed."""
+    global model, preprocess, device, model_loaded, dreamsim_available
+    if model_loaded:
+        return True # Already loaded successfully
+
+    if not dreamsim_available:
+        print("DreamSim library not available, cannot load model.")
+        return False
+
+    if model is not None and preprocess is not None and device is not None:
+        model_loaded = True # Already loaded
+        return True
+
+    print("Attempting to load DreamSim model...")
     try:
-        print("Loading DreamSim model...")
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        _device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         # dreamsim() returns model, preprocess
-        model, preprocess = dreamsim_model_loader(pretrained=True, device=device)
-        model.eval()  # Set to evaluation mode
-        print(f"DreamSim model loaded on {device}.")
+        _model, _preprocess = dreamsim_model_loader(pretrained=True, device=_device)
+        _model.eval()  # Set to evaluation mode
+
+        # Assign to global variables only after successful loading
+        model = _model
+        preprocess = _preprocess
+        device = _device
+        model_loaded = True
+        print(f"DreamSim model loaded successfully on {device}.")
+        return True
     except Exception as e:
-        print(f"Error loading DreamSim model: {e}")
+        print(f"FATAL Error loading DreamSim model: {e}")
+        traceback.print_exc()
+        # Ensure globals remain None on failure
         model = None
         preprocess = None
         device = None
-else:
-    print("DreamSim library not imported, cannot load model.")
+        model_loaded = False
+        return False
 
 
-# --- Helper Functions ---
 def get_modification_time(file_path):
     """Gets the modification time of a file."""
     try:
@@ -54,62 +81,45 @@ def get_modification_time(file_path):
 @torch.no_grad()  # Essential for inference
 def calculate_dreamsim_distance(img_path1, img_path2, model, preprocess, device):
     """Calculates DreamSim distance between two images."""
+    # Safeguard checks
     if not model or not preprocess or not device:
-        print("DreamSim model/preprocess not loaded. Cannot calculate distance.")
+        print("DreamSim model/preprocess/device not available during distance calculation.")
         return None  # Use None to indicate error
 
     try:
         image1 = Image.open(img_path1).convert("RGB")
         image2 = Image.open(img_path2).convert("RGB")
 
-        # Preprocess images - preprocess likely returns [1, C, H, W]
+        # Preprocess images
         processed_img1 = preprocess(image1).to(device)
         processed_img2 = preprocess(image2).to(device)
 
         # --- Verify shape AFTER preprocess ---
-        # Check dimensions and that batch size is 1
-        # Assuming default input size for DreamSim is 224x224
-        expected_shape = torch.Size([1, 3, 224, 224])
+        expected_shape = torch.Size([1, 3, 224, 224]) # Assuming DreamSim standard
         if processed_img1.shape != expected_shape or processed_img2.shape != expected_shape:
             print(
                 f"ERROR: Unexpected shape after preprocess. img1: {processed_img1.shape}, img2: {processed_img2.shape}"
             )
-            print(f"       Expected {expected_shape}.")
-            # Optionally, try to reshape if possible and safe, but better to error out
-            # Example (use with caution):
-            # if processed_img1.ndim == 3 and processed_img1.shape[0] == 3: # Check if it's [C, H, W]
-            #     processed_img1 = processed_img1.unsqueeze(0)
-            #     print("Warning: Reshaped processed_img1 by adding batch dim.")
-            # else:
-            #     return None # Cannot safely reshape
-            return None  # Error out if shape is not exactly as expected
+            return None # Error out
 
-        # --- Assign directly, DO NOT add extra unsqueeze ---
         batched_img1 = processed_img1
         batched_img2 = processed_img2
 
         # --- Model call and output handling ---
         output = model(batched_img1, batched_img2)
 
-        # Check if the output is a tuple/list and assume distance is the first element
         if isinstance(output, (tuple, list)):
-            if len(output) > 0:
-                distance_tensor = output[0]
-            else:
-                print(
-                    f"Error: DreamSim model returned an empty sequence for {Path(img_path1).name}/{Path(img_path2).name}"
-                )
-                return None
+            distance_tensor = output[0] if len(output) > 0 else None
         elif torch.is_tensor(output):
-            distance_tensor = output  # Assume it's the distance tensor directly
+            distance_tensor = output
         else:
-            print(f"Error: Unexpected output type from DreamSim model: {type(output)}")
-            return None
+            distance_tensor = None
 
-        # Ensure we have a tensor before calling .item()
         if not torch.is_tensor(distance_tensor):
-            print(f"Error: Extracted DreamSim distance is not a tensor (type: {type(distance_tensor)})")
-            return None
+             print(
+                    f"Error: DreamSim model returned unexpected output or couldn't extract tensor. Type: {type(output)}, Raw: {str(output)[:100]}"
+                )
+             return None
 
         # Return the scalar distance value
         return distance_tensor.item()
@@ -119,7 +129,7 @@ def calculate_dreamsim_distance(img_path1, img_path2, model, preprocess, device)
         return None
     except Exception as e:
         print(f"Error calculating DreamSim distance between {Path(img_path1).name} and {Path(img_path2).name}: {e}")
-        traceback.print_exc()  # Print full traceback for detailed debugging
+        traceback.print_exc()  # Print full traceback
         return None
 
 
@@ -158,6 +168,8 @@ def load_cache(cache_file, gt_mtime_current, mask_mtime_current):
         #     print(f"Mask mtime changed for {cache_file.name}. Recalculating.")
         #     return None
 
+        # Don't print cache hit here, main function will
+        # print(f"Cache hit for {cache_file.name}") # Removed
         return cache_data
     except (json.JSONDecodeError, KeyError, Exception) as e:
         print(f"Error loading cache file {cache_file}: {e}. Recalculating.")
@@ -184,30 +196,19 @@ def save_cache(cache_file, data, gt_mtime, mask_mtime):
 def calculate_scene_dreamsim(gt_path_str, mask_path_str, results_dir_str, cache_dir_str, num_images=DEFAULT_NUM_IMAGES):
     """
     Calculates the average DreamSim distance for a given scene.
-
-    Args:
-        gt_path_str (str): Path to the ground truth image.
-        mask_path_str (str): Path to the mask image (for cache validation).
-        results_dir_str (str): Path to the directory containing result images (0.png, 1.png, ...).
-        cache_dir_str (str): Path to the base directory for caching.
-        num_images (int): Number of result images to process.
-
-    Returns:
-        float: The average DreamSim distance (lower is better), or None on error.
+    Loads the model only if needed.
     """
     gt_path = Path(gt_path_str)
     mask_path = Path(mask_path_str)
     results_dir = Path(results_dir_str)
     cache_dir = Path(cache_dir_str)
 
+    # --- Input Validation ---
     if not gt_path.is_file():
         print(f"Error: Ground truth image not found at {gt_path}")
         return None
     if not results_dir.is_dir():
         print(f"Error: Results directory not found at {results_dir}")
-        return None
-    if not model or not preprocess or not device:
-        print("Error: DreamSim model/preprocess not loaded. Cannot proceed.")
         return None
 
     results_dir_name = results_dir.name
@@ -218,12 +219,19 @@ def calculate_scene_dreamsim(gt_path_str, mask_path_str, results_dir_str, cache_
     mask_mtime = get_modification_time(mask_path)
     cached_results = load_cache(cache_file, gt_mtime, mask_mtime)
     if cached_results:
+        # Check if cached average is valid (not None)
         avg_cache = cached_results.get("average")
         if avg_cache is not None:
+            print(f"Cache hit for {results_dir_name}") # Print hit here
             return avg_cache
         else:
             print(f"Cached average for {results_dir_name} was None. Recalculating.")
             # Proceed to recalculate
+
+    # --- Model Loading (Only if needed) ---
+    if not _load_model_if_needed():
+        print("Error: Failed to load DreamSim model or library unavailable. Cannot proceed.")
+        return None
 
     # --- Calculation ---
     print(f"Calculating DreamSim for scene: {results_dir_name}")
@@ -236,8 +244,10 @@ def calculate_scene_dreamsim(gt_path_str, mask_path_str, results_dir_str, cache_
 
     if not image_files:
         print(f"Warning: No valid result images (0..{num_images-1}.png) found in {results_dir}")
+        save_cache(cache_file, {"average": None, "per_image": {}, "count": 0}, gt_mtime, mask_mtime)
         return None
 
+    # Pass loaded model, preprocess, device to helper
     for i in tqdm(range(num_images), desc=f"DreamSim Processing {results_dir_name}", leave=False):
         result_img_name = f"{i}.png"
         result_img_path = results_dir / result_img_name
@@ -285,15 +295,17 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    if not dreamsim_model_loader or not model:
-        print("Exiting because DreamSim library or model failed to load.")
+    # Check if library is available *before* trying to calculate
+    if not dreamsim_available:
+        print("Exiting because DreamSim library is not installed.")
         print("FINAL_SCORE:ERROR")
-        exit(1)  # Exit with error code
+        exit(1)
 
     # Ensure cache subdirectories exist
     dreamsim_cache_dir = Path(args.cache_dir) / "per_scene_cache" / "dreamsim"
     dreamsim_cache_dir.mkdir(parents=True, exist_ok=True)
 
+    # calculate_scene_dreamsim handles model loading internally
     avg_score = calculate_scene_dreamsim(
         args.gt_path, args.mask_path, args.results_dir, args.cache_dir, args.num_images
     )
@@ -304,4 +316,4 @@ if __name__ == "__main__":
         print(f"FINAL_SCORE:{avg_score:.8f}")
     else:
         print(f"\nFailed to calculate DreamSim distance for {Path(args.results_dir).name}")
-        print("FINAL_SCORE:ERROR")
+        print("FINAL_SCORE:ERROR") # Print error if calculation failed (e.g., model load failed)

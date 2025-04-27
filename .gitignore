@@ -1,6 +1,8 @@
 # Realfill specific ignored files
 
-realfill_data_release_full/
+**/realfill_data_release_full/
+
+realfill_results/
 
 # Benchmark related files
 
