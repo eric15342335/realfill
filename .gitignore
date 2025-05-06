@@ -4,6 +4,10 @@
 
 realfill_results/
 
+*.mp4
+*.pptx
+*.pdf
+
 # Benchmark related files
 
 models/

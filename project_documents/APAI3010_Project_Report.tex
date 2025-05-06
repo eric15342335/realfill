@@ -1,0 +1,952 @@
+\documentclass{article}
+
+% --- Tell natbib to use numbers BEFORE loading neurips_2024 ---
+% This resolves the "Bibliography not compatible" error.
+\PassOptionsToPackage{numbers, compress}{natbib} % 'compress' makes [1, 2, 3] into [1-3]
+
+% --- Load NeurIPS Style ---
+\usepackage[preprint]{neurips_2024}
+% note: the NeurIPS template does not include line numbers in final submission/preprint,
+% so whether including this for our project is debatable.
+\RequirePackage{lineno}
+\linenumbers
+
+% --- Standard Packages Used ---
+\usepackage[T1]{fontenc}    % use 8-bit T1 fonts
+\usepackage{hyperref}       % hyperlinks
+\usepackage{booktabs}       % professional-quality tables
+\usepackage{nicefrac}       % compact symbols for 1/2, etc.
+\usepackage{microtype}      % microtypography
+\usepackage{xcolor}         % colors
+\usepackage{graphicx}       % Required for including images (\includegraphics)
+\usepackage{amsmath}        % For advanced math typesetting (like environments: equation, align)
+\usepackage{amssymb}        % Provides various math symbols
+\usepackage{textcomp}       % Provides symbols like \textuparrow, \textdownarrow
+\usepackage{multirow}       % For multi-row cells in tables
+\usepackage{siunitx}        % For well-formatted and aligned numbers in tables
+\usepackage{caption}        % Improved caption formatting
+\usepackage{subcaption}     % For creating subfigures (useful for comparisons)
+\usepackage{float}          % Provides finer control over float placement (like [H] option)
+\usepackage{bookmark}
+\usepackage{enumitem}
+%\usepackage[document]{ragged2e}       % Left align
+
+% --- PDF Compression Settings (for pdfLaTeX) ---
+\pdfcompresslevel=9       % Maximize stream compression (0-9)
+\pdfobjcompresslevel=3    % Maximize object stream compression (0-3)
+                          % Use 2 or 3 for best results. Try 3 first.
+
+% --- siunitx Setup (For consistent table number formatting like your benchmark file) ---
+\sisetup{
+    round-mode=places, % Round numbers to specified places
+    round-precision=3, % Default rounding precision (can be overridden per table)
+    table-format=2.3,  % Default format (adjust as needed, e.g., 2 digits before, 3 after decimal)
+    reset-text-family = false,
+    text-family-to-math = true,
+    reset-text-series = false,
+    text-series-to-math = true,
+}
+
+% --- Hyperref Setup (Customizes link appearance) ---
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue,
+    citecolor=green,
+    urlcolor=black,
+    pdftitle={Reproducing, Exploring, and Improving RealFill}, % PDF metadata
+    pdfauthor={Cheng Ho Ming, Chung Shing Hei, Chan Hin Chun Jensen}  % PDF metadata
+}
+
+% --- Caption Setup ---
+\captionsetup{skip=3mm, font=small, labelfont=bf} % Slightly smaller caption font, bold label
+\setlength{\belowbottomsep}{3mm}
+
+\raggedbottom % idk what fix is this --eric
+
+% --- Document Title ---
+\title{Reproducing, Exploring, and Improving RealFill: \\ Reference-Driven Generation for Authentic Image Completion}
+
+% --- Author Information ---
+\author{%
+  Cheng Ho Ming \\
+  \small{(3036216734)} \\
+  \url{eric310@connect.hku.hk} \\
+  \And % Let LaTeX decide line break
+  Chung Shing Hei \\
+  \small{(3036216760)} \\
+  \url{maxcsh@connect.hku.hk} \\
+  \AND % Force a line break here
+  Chan Hin Chun Jensen \\
+  \small{(3036218017)} \\
+  \url{u3036218017@connect.hku.hk} \\
+}
+
+\begin{document}
+
+\maketitle
+
+% --- Course Information  ---
+\begin{center}
+    \textbf{APAI3010/STAT3010 Image Processing and Computer Vision - Group Project} \\
+    Report Deadline: May 6, 2025
+\end{center}
+\vspace{1.5em} % Add some vertical space after course info
+
+% --- Abstract ---
+\begin{abstract}
+    Image completion aims to fill missing image regions realistically. Although diffusion models excel at generating plausible content, achieving \emph{authentic} completion faithfully to the original scene remains a challenge. RealFill, proposed by Tang et al. (2024), addresses this via reference-driven fine-tuning of a diffusion inpainting model using Low-Rank Adaptation (LoRA). This project analyzes RealFill. We reproduce key results from the original paper and conduct additional experiments to assess the method's performance and limitations, including tests on custom data. Based on this analysis, we propose and implement an extension, \emph{ReFill}, that targets iterative refinement of RealFill through self-supervised reference augmentation using LoFTR-ranked generated images. We evaluated \emph{ReFill} quantitatively and qualitatively against the baseline, finding that the proposed extension yielded only marginal improvements over the original RealFill method. The code for this project is publicly available at \url{https://github.com/eric15342335/realfill}.
+\end{abstract}
+
+% --- Main Body Sections ---
+
+\section{Introduction}
+\label{sec:introduction}
+Image completion, the task of filling missing image regions, is a fundamental problem in computer vision with applications ranging from photo restoration to object removal. The goal is typically twofold: the generated content should be \emph{visually plausible}, seamlessly blending with the surrounding context, and ideally, it should be \emph{authentic}, reflecting the true content originally present in the missing area.
+
+Traditional methods, such as patch synthesis or geometry-based approaches, often struggle with complex scenes or large missing areas. The advent of deep generative models, particularly Generative Adversarial Networks (GANs) \cite{goodfellow2014generative} and more recently Diffusion Models \cite{ho2020denoising, song2021scorebased, rombach2022high}, has revolutionized image generation and inpainting. Diffusion models, trained on vast datasets, possess powerful priors about natural images, enabling them to generate highly realistic content. However, when applied directly to inpainting tasks (e.g., using text prompts for guidance), standard diffusion models often generate content that is merely \emph{plausible} within the context, rather than being \emph{authentic} to the specific scene depicted \cite{tang2024realfill}.
+
+To address this gap, Tang et al. (2024) proposed RealFill \cite{tang2024realfill}, a method designed specifically for \emph{authentic image completion}. The core idea is to leverage a small set of reference images ($X_{ref}$, typically 1-5) that capture the same scene as the target image ($I_{tgt}$), with possibly different orientation, lighting, angle, and slightly varied background, containing a missing region ($M_{tgt}$) to be filled. RealFill fine-tunes a pretrained Stable Diffusion v2 inpainting model \cite{rombach2022high} using Low-Rank Adaptation (LoRA) \cite{hu2022lora} on the specific context provided by these reference images and the known parts of the target image. This personalization allows the model to learn the unique appearance, lighting, and style of the scene, enabling it to generate content for the missing region that is faithful to what should have been there. RealFill demonstrated robustness even with significant variations in viewpoint, lighting, aperture, and style between the reference and target images.
+
+Section \ref{sec:reproduction} details the original methodology and outlines our efforts to reproduce its key findings. Building on this foundation, Section \ref{sec:exploration} presents an in-depth experimental analysis, identifying key performance characteristics, strengths, and limitations based on our reproduced results and further tests. Motivated by these findings, Section \ref{sec:extension} introduces our proposed extension, \emph{ReFill}, outlining its rationale, implementation, and evaluation against the baseline. Finally, Section \ref{sec:conclusion} summarizes our contributions, reflects on the outcomes, and discusses potential avenues for future research in authentic image completion.
+
+\section{Reproduction of the method}
+\label{sec:reproduction}
+This section outlines the methdology of RealFill pipeline as presented by Tang et al. \cite{tang2024realfill} and explains our implementation details and reproduction results.
+
+\subsection{RealFill methodology}
+RealFill tackles authentic image completion by adapting a general-purpose diffusion model to a specific scene context.
+
+\textbf{Input.} A set of $n$ reference images ($X_{ref} = \{I_{ref_1}, ..., I_{ref_n}\}$, typically $1 \le n \le 5$) and one target image ($I_{tgt}$) with a corresponding binary mask ($M_{tgt}$) indicating the region to be filled (where $M_{tgt}=1$). These images capture roughly the same scene but can have varying viewpoints, lighting, etc.
+
+\textbf{Model.} A pretrained Stable Diffusion v2 inpainting model, comprising a VAE, a UNet, a text encoder (CLIP), and a noise scheduler (DDPMScheduler).
+
+\textbf{Fine-tuning with LoRA.} Instead of fine-tuning the entire model, RealFill employs Low-Rank Adaptation (LoRA) \cite{hu2022lora}. Trainable low-rank matrices are injected into specific layers of the UNet and the text encoder. Only these LoRA weights are updated during fine-tuning, significantly reducing the number of trainable parameters and computational cost.
+
+\textbf{Training process.} The model is fine-tuned on both the reference images ($X_{ref}$) and the target image ($I_{tgt}$). During training, random masks ($m$) are generated and applied to the input images ($x \in X_{ref} \cup \{I_{tgt}\}$). The UNet is trained to predict the noise added to the VAE-encoded latents, conditioned on the masked latent, the random mask $m$, the timestep $t$, and a fixed text embedding $p$ (e.g., "a photo of sks"). The loss function (Eq. 3 in the paper) is a standard diffusion loss, potentially weighted based on whether the pixel belongs to the original known region of the target image ($M_{tgt}=0$) or not.
+\[
+    L = \mathbb{E}_{x,t,\epsilon,m} \| \epsilon - \epsilon_\theta(z_t, t, p, m, (1 - m) \odot x) \|^2_W
+\]
+(Note: $W$ indicates potential weighting, $z_t$ is noisy latent, $\epsilon_\theta$ is the model prediction.)
+
+\textbf{Inference.} The fine-tuned LoRA weights are merged with the original model weights. The pipeline then takes the masked target image ($I_{tgt}$, $M_{tgt}$) and the learned text prompt $p$ as input. It iteratively denoises a random latent variable, conditioned on the VAE encoding of the known regions ($I_{tgt} \odot (1-M_{tgt})$) and the mask $M_{tgt}$, to generate the completed image $I_{out}$. The final output often involves alpha compositing the generated region with the original known region using a feathered mask.
+
+\textbf{Correspondence-based seed selection.} Since diffusion sampling is stochastic, multiple outputs can be generated using different random seeds. RealFill proposes using a feature matcher like LoFTR \cite{sun2021loftr} to compute correspondences between the generated content (in the filled region) and the original reference images ($X_{ref}$). Outputs with a higher number of confident matches are ranked higher, providing a way to automatically filter for results more faithful to the references.
+
+\subsection{Implementation setup}
+\label{subsec:implementation_setup} % Optional label remains useful
+
+\textbf{Environment.} Our primary environment for reproduction was Google Colab Free, equipped with NVIDIA T4 GPUs featuring 16 GB of VRAM.
+
+\textbf{Software.} The core implementation was based on our adapted codebase\footnote{\url{https://github.com/eric15342335/realfill}}, which is a fork of an unofficial implementation\footnote{\url{https://github.com/thuanz123/realfill}}, incorporating custom fixes and benchmarking scripts. Key libraries employed included \texttt{torch}~\cite{ansel2024pytorch}, \texttt{diffusers}~\cite{vonplaten2022diffusers}, \texttt{accelerate}~\cite{accelerate}, \texttt{transformers}~\cite{wolf2020transformers}, \texttt{peft}~\cite{peft} (for LoRA), \texttt{bitsandbytes}~\cite{dettmers2021_8bit}, \texttt{xformers}~\cite{xFormers2022}, and \texttt{kornia}~\cite{riba2020kornia} (for LoFTR). Benchmarking relied on libraries such as \texttt{lpips}~\cite{zhang2018unreasonable} and \texttt{dreamsim}~\cite{fu2023dreamsim}. Specific package and detailed setup instructions are provided in the documentation accompanying our source code submission.
+
+\textbf{Dataset.} We used the dataset provided by the original RealFill authors\footnote{\url{https://drive.google.com/file/d/18hlxyw3g3C9QwG9PtFCPedMgcVxFAN0e}}, focusing our quantitative reproduction on scenes from the \texttt{RealBench} subset contained within, which allows us conducting direct comparison with the paper's results. Each scene folder (e.g., within \texttt{RealBench/22/}) contains reference images (\texttt{ref/}), the target image (\texttt{target/target.png}), the mask (\texttt{target/mask.png}), and the ground truth (\texttt{target/gt.png}). We chose to focus our reproduction efforts on comparing against some (N=12) of the RealBench results as this subset allowed for direct quantitative comparison with the paper's core benchmark while being feasible within our computational resources.
+
+\textbf{Training configuration.} We followed the parameters set in the original paper~\cite{tang2024realfill} with some adjustments. The model used was \texttt{stabilityai/stable-diffusion-2-inpainting}, based on Stable Diffusion~\cite{rombach2022high}. The resolution was 512x512 pixels. The batch size was 16. Learning rates were set to UNet LR = 2e-4 and Text Encoder LR = 4e-5. The scheduler was a constant learning rate with 100 linear warmup steps. Training steps consisted of 2000 steps per scene. For LoRA~\cite{hu2022lora}, the rank was 8, alpha = 16, and dropout was 0.1, targeting modules for the UNet and Text Encoder.
+
+\textbf{Optimizations and Precision.} Given the computational constraints of the Google Colab Free tier environment (NVIDIA T4 GPU with 16 GB VRAM), several optimizations were crucial for feasible training. We utilized \textbf{FP16 mixed-precision} managed via the \texttt{accelerate} library~\cite{accelerate} to reduce memory footprint and potentially accelerate the \emph{training} process. Also, we enabled the 8-bit Adam optimizer~\cite{dettmers2021_8bit} and installed \texttt{xformers}~\cite{xFormers2022} for further memory savings and optimized attention mechanisms. Additionally, we set gradients to none (\texttt{----set\_grads\_to\_none}) instead of zeroing them, which further helped prevent CUDA out-of-memory errors. While the original paper~\cite{tang2024realfill} does not explicitly state the precision used, adopting this combination of mixed-precision and memory-saving techniques was necessary for our setup. The potential impact attributed to using mixed-precision is further investigated in Section \ref{subsec:mixed_precision_training}.
+
+\textbf{Benchmarking configuration.} We implemented a benchmarking process to evaluate the generated images. Scripts were developed to automatically calculate several widely-used metrics: PSNR, SSIM, LPIPS~\cite{zhang2018unreasonable}, DreamSim~\cite{fu2023dreamsim}, DINO~\cite{caron2021emerging}, and CLIP~\cite{radford2021clip}. For each scene, these metrics were computed by comparing 16 independently generated inference images (each using a different random seed) against the corresponding ground truth image (\texttt{gt.png}). The final reported metrics represent the average across these 16 samples per scene. Generating 16 samples provided a balance between capturing potential output variability and maintaining feasible computation times for benchmarking across multiple scenes. Masked metrics (PSNR, SSIM, LPIPS) were evaluated specifically within the inpainted region (defined by \texttt{mask.png}), while full-image metrics (DreamSim, DINO, CLIP) assessed overall similarity across the entire image. To improve efficiency during repeated evaluations, results were cached per scene and subsequently aggregated.
+
+\textbf{LoFTR reference selection/ranking.} A script using Kornia's implementation of LoFTR \cite{sun2021loftr}, specifically utilizing the pretrained 'outdoor' model, facilitated both the reference supplementation in our extension (detailed in Section \ref{sec:extension}) and the correspondence-based filtering analysis (Section \ref{subsec:correspondence_based_seed_selection}). This script computes feature matches between generated candidate images and the original reference images ($X_{ref}$). For the filtering analysis, it was configured to calculate and store correspondence scores (e.g., in a JSON file).
+
+\subsection{Results}
+\label{subsec:reproduction_results}
+
+Table \ref{tab:reproduced_realbench_comparison} presents a comparison between the RealFill results reported in the original RealFill paper and our own reproduction results using FP16 mixed precision training.
+
+% --- Table: Reproduced vs Reported ---
+\begin{table}[H] % Use [H] from float package to suggest placing it "here"
+    \centering
+    \setlength{\tabcolsep}{4pt} % Adjust column spacing if needed
+    \sisetup{round-precision=3} % Set precision for this table specifically if needed
+    \begin{tabular}{@{} l l S[table-format=2.2, round-precision=2] S[table-format=1.3] S[table-format=1.3] S[table-format=1.3] S[table-format=1.3] S[table-format=1.3] @{}}
+        \toprule
+                                               &                           & \multicolumn{3}{c}{\textbf{low-level}} & \multicolumn{1}{c}{\textbf{mid-level}} & \multicolumn{2}{c}{\textbf{high-level}}                                                        \\
+        \cmidrule(lr){3-5} \cmidrule(lr){6-6} \cmidrule(lr){7-8}
+        \multicolumn{2}{@{}l}{\textbf{Method}} & {PSNR$\uparrow$}          & {SSIM$\uparrow$}                       & {LPIPS$\downarrow$}                    & {DreamSim$\downarrow$}                  & {DINO$\uparrow$} & {CLIP$\uparrow$}                  \\
+        \midrule
+        \multirow{2}{*}{prompt based}          & SD Inpaint                & 10.63                                  & 0.282                                  & 0.605                                   & 0.213            & 0.831            & 0.874          \\
+                                               & Generative Fill           & 10.92                                  & 0.311                                  & 0.598                                   & 0.212            & 0.851            & 0.898          \\
+        \midrule
+        \multirow{4}{*}{reference based}       & Paint-by-Example          & 10.13                                  & 0.244                                  & 0.642                                   & 0.237            & 0.797            & 0.859          \\
+                                               & TransFill                 & 13.28                                  & 0.404                                  & 0.542                                   & 0.192            & 0.860            & 0.866          \\
+                                               & RealFill (Paper)          & 14.78                                  & 0.424                                  & 0.431                                   & 0.077            & 0.948            & 0.962          \\
+        % Ensure \bfseries is applied to the name, not relying on siunitx global settings
+                                               & \bfseries RealFill (Ours) & \textbf{13.78}                         & \textbf{0.440}                         & \textbf{0.248}                          & \textbf{0.062}   & \textbf{0.960}   & \textbf{0.965} \\
+        \bottomrule
+    \end{tabular}
+    \caption{RealBench Comparison: Original paper results (N=33 scenes) vs. our FP16 reproduction (N=12 scenes). Baselines are from the original paper.}
+    \label{tab:reproduced_realbench_comparison}
+    {\footnotesize Note: $\uparrow$ indicates higher is better, $\downarrow$ indicates lower is better.}
+\end{table}
+
+Qualitatively, our reproduced results generally align with the examples shown in the RealFill paper. Figure \ref{fig:reproduced_qualitative_example} shows a representative example from our reproduction run for Scene 5 of the RealBench dataset.
+
+% --- Qualitative Figure ---
+\begin{figure}[H] % Use [H] for "here" placement
+    \centering
+    % Example using subfigure environment for better layout
+    \begin{subfigure}[b]{0.26\linewidth}
+        \centering
+        \begin{subfigure}[b]{0.55\linewidth}
+            \includegraphics[width=\linewidth, height=3.355cm]{5/ref/2.png}
+        \end{subfigure}
+        \begin{subfigure}[b]{0.4\linewidth}
+            \includegraphics[width=\linewidth, height=2.33cm]{5/ref/0.png}
+            \includegraphics[width=\linewidth, height=1cm]{5/ref/1.png}
+        \end{subfigure}
+        \caption{Reference Images}
+    \end{subfigure}
+    \hfill % Add space between subfigures
+    \begin{subfigure}[b]{0.24\linewidth}
+        \centering
+        \includegraphics[width=\linewidth]{5/target/target.png}
+        \caption{Target + Mask}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}[b]{0.24\linewidth}
+        \centering
+        \includegraphics[width=\linewidth]{5/results/13.png}
+        \caption{Our Reproduction}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}[b]{0.24\linewidth}
+        \centering
+        \includegraphics[width=\linewidth]{5/target/gt.png}
+        \caption{Ground Truth}
+    \end{subfigure}
+    \caption{Qualitative reproduction result for RealBench Scene 5. (a) Sample reference images. (b) The target image with the masked region (visualized). (c) An example output from our reproduction run. (d) The ground truth completion.}
+    \label{fig:reproduced_qualitative_example}
+\end{figure}
+
+\subsection{Comparison and discussion}
+\label{subsec:comparison_and_discussion}
+
+Comparing our reproduced metrics (Table \ref{tab:reproduced_realbench_comparison}, \emph{RealFill (Ours)} row) with those reported in the original paper (\emph{RealFill (Paper)}), we observe differences across several metrics.
+Our reproduced PSNR score (where higher is better) is slightly lower at 13.78 (compared to the paper's 14.78).
+Conversely, our SSIM score (higher is better) is slightly higher at 0.440 (compared to 0.424).
+A more notable difference occurred with the LPIPS metric (lower is better), where our result of 0.248 indicates substantially better perceptual similarity compared to the reported 0.431 (0.248 vs. 0.431).
+The DreamSim score (lower is better) also showed a slight improvement in our reproduction (0.062 vs. 0.077).
+The high-level semantic metrics DINO (0.960 vs. 0.948) and CLIP (0.965 vs. 0.962) remained very close to the reported values, suggesting that our reproduction successfully captured the overall object identity and style characteristics targeted by RealFill.
+
+Potential reasons for any observed discrepancies, even when averaging over the same scenes, could be due to stochasticity, where the inherent randomness in diffusion model sampling (even with a fixed seed, slight variations can occur across hardware/library versions) and the fine-tuning process (weight initialization, data shuffling order) can lead to slightly different model checkpoints and final outputs.
+
+Furthermore, our averages are based on N=12 scenes from RealBench, while the original paper reported averages over N=33 scenes, which could also contribute to variations in the aggregate scores.
+
+\section{Experimental exploration and analysis}
+\label{sec:exploration}
+
+\subsection{Analysis}
+
+\label{subsec:original_performance_analysis}
+Based on the results from the reproduction phase and examples in the original paper \cite{tang2024realfill}, we analyzed the strengths and weaknesses of RealFill.
+
+\textbf{Authenticity.} RealFill's primary strength lies in its ability to generate completions that are often remarkably faithful to the original scene content, capturing specific object identities, textures, and lighting conditions learned from the reference images. This contrasts sharply with generic inpainting models that might produce plausible but scene-inconsistent results.
+
+\textbf{Handling variations.} The method shows robustness to moderate variations in viewpoint, lighting, image style, and even non-rigid object poses between reference images and the target image.
+
+\textbf{Coherence.} Generated regions generally blend well with the surrounding context in the target image, maintaining coherence in terms of style and lighting.
+
+While RealFill is powerful in generating authentic image completions, our experiments confirmed several limitations, consistent with those reported by Tang et al.
+
+\textbf{Geometric inconsistency.} When faced with large viewpoint changes or complex 3D structures inadequately captured by the references, RealFill struggles to maintain strict geometric accuracy. The generated content might appear plausible locally but have perspective distortions or misalignments when considered globally (See Figure \ref{fig:failure_geometric}). This suggests the model learns appearance correlations more strongly than explicit 3D geometry.
+
+\textbf{Ambiguity and hallucination.} If the reference images provide conflicting information or insufficient coverage of the area to be filled, the model may hallucinate content (See Figure \ref{fig:reproduction_qualitative_fail}) or produce blurry, averaged-out results in the ambiguous regions.
+
+\textbf{Dependence on reference images.} The success of RealFill is highly related on the provided set of reference images. If the references are blurry, poorly lit, or fail to show the required region from an informative angle, the completion quality degrades significantly.
+
+\textbf{High computational cost per scene.} The need for per-scene fine-tuning imposes a computational cost for each new inpainting task, which is around 2-3 hours per scene on an Google Colab T4 instance.
+
+Figures \ref{fig:success_example} and \ref{fig:failure_geometric} illustrate typical success and failure cases observed during our exploration.
+
+% --- Success/Failure Figures ---
+\begin{figure}[H]
+    \centering
+    \begin{subfigure}[b]{0.24\linewidth}
+        \begin{subfigure}[b]{0.6\linewidth}
+            \includegraphics[width=\linewidth, height=3.355cm]{12/ref/0.png}
+        \end{subfigure}
+        \begin{subfigure}[b]{0.3\linewidth}
+            \includegraphics[width=\linewidth]{12/ref/1.png}
+        \end{subfigure}
+        \caption{Reference Images}
+    \end{subfigure}
+    \begin{subfigure}[b]{0.24\linewidth}
+        \centering
+        \includegraphics[width=\linewidth]{12/target/target.png}
+        \caption{Refs + Target/Mask}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}[b]{0.24\linewidth}
+        \centering
+        \includegraphics[width=\linewidth]{12/results/1.png} % 
+        \caption{Successful Completion}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}[b]{0.24\linewidth}
+        \centering
+        \includegraphics[width=\linewidth]{12/target/gt.png}
+        \caption{Ground Truth}
+    \end{subfigure}
+    \caption{Example of a successful RealFill completion (Scene 12) where object identity and style are well-preserved.}
+    \label{fig:success_example}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+    \begin{subfigure}[b]{0.24\linewidth}
+        \begin{subfigure}[b]{0.32\linewidth}
+            \includegraphics[width=\linewidth, height=1.1cm]{3/ref/0.png}
+        \end{subfigure}
+        \begin{subfigure}[b]{0.32\linewidth}
+            \includegraphics[width=\linewidth, height=1.1cm]{3/ref/2.png}
+        \end{subfigure}
+        \begin{subfigure}[b]{0.32\linewidth}
+            \includegraphics[width=\linewidth, height=1.1cm]{3/ref/3.png}
+        \end{subfigure}
+        \begin{subfigure}[b]{1\linewidth}
+            \includegraphics[width=\linewidth, height=2.21cm]{3/ref/1.png}
+        \end{subfigure}
+        \caption{Reference Images}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}[b]{0.24\linewidth}
+        \centering
+        \includegraphics[width=\linewidth]{3/target/target.png}
+        \caption{Refs + Target/Mask}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}[b]{0.24\linewidth}
+        \centering
+        \includegraphics[width=\linewidth]{3/results/10.png} % 
+        \caption{Failure (Geometry)}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}[b]{0.24\linewidth}
+        \centering
+        \includegraphics[width=\linewidth]{3/target/gt.png} % 
+        \caption{Ground Truth}
+    \end{subfigure}
+    \caption{Example of a failure case (Scene 30) exhibiting geometric inconsistency due to significant viewpoint change or complex structure.}
+    \label{fig:failure_geometric}
+\end{figure}
+
+\subsection{Mixed precison training}
+\label{subsec:mixed_precision_training}
+To assess the impact of numerical precision on RealFill's performance, we compared results obtained using FP16 mixed-precision (our default reproduction setting) against full FP32 precision. Due to the higher computational cost of FP32, this comparison was performed on a smaller subset of N=6 scenes from RealBench where both configurations were run. Table \ref{tab:fp_comparison_realbench} summarizes the averaged metrics.
+
+% Table for FP16 vs FP32 (Table 2 from benchmark.tex)
+\begin{table}[H]
+    \centering
+    \setlength{\tabcolsep}{4pt} % Adjust column spacing
+    \sisetup{round-precision=3} % Ensure 3 decimal places
+    \begin{tabular}{@{} l S[table-format=2.3] S[table-format=1.3] S[table-format=1.3] S[table-format=1.3] S[table-format=1.3] S[table-format=1.3] @{}}
+        \toprule
+                           & \multicolumn{3}{c}{\textbf{low-level}} & \multicolumn{1}{c}{\textbf{mid-level}} & \multicolumn{2}{c}{\textbf{high-level}}                                                                \\
+        \cmidrule(lr){2-4} \cmidrule(lr){5-5} \cmidrule(lr){6-7}
+        \textbf{Precision} & {PSNR$\uparrow$}                       & {SSIM$\uparrow$}                       & {LPIPS$\downarrow$}                     & {DreamSim$\downarrow$} & {DINO$\uparrow$} & {CLIP$\uparrow$} \\
+        \midrule
+        FP16               & 14.163                                 & 0.495                                  & 0.230                                   & 0.055                  & 0.958            & 0.963            \\
+        FP32               & 14.495                                 & 0.503                                  & 0.225                                   & 0.054                  & 0.954            & 0.960            \\
+        \bottomrule
+    \end{tabular}
+    \caption{FP16 vs FP32 Comparison on RealBench (Average over N=6 common scenes).}
+    \label{tab:fp_comparison_realbench}
+\end{table}
+
+\subsection{Correspondence-based seed selection}
+\label{subsec:correspondence_based_seed_selection}
+The original RealFill method proposed using LoFTR correspondence scores between generated outputs and reference images to potentially rank better, more faithful results (Correspondence-Based Seed Selection). We analyzed the effect of applying such filtering to the 16 generated samples per scene from our N=12 RealBench FP16 run. Table \ref{tab:loftr_filtering_ours} shows how the average metrics change as we progressively keep only the top-ranked images based on LoFTR scores.
+
+% Table for LoFTR Filtering
+\begin{table}[H]
+    \centering
+    \setlength{\tabcolsep}{5pt} % Adjust column spacing
+    % Use local siunitx setup for higher precision as in benchmark.tex
+    \sisetup{round-precision=4, table-format=2.4} % Use 4 decimal places for PSNR
+    \begin{tabular}{@{} l S S[table-format=1.4] S[table-format=1.4] S[table-format=1.4] S[table-format=1.4] S[table-format=1.4] @{}}
+        \toprule
+                                & \multicolumn{3}{c}{\textbf{low-level}} & \multicolumn{1}{c}{\textbf{mid-level}} & \multicolumn{2}{c}{\textbf{high-level}}                                                                \\
+        \cmidrule(lr){2-4} \cmidrule(lr){5-5} \cmidrule(lr){6-7}
+        \textbf{Filtering Rate} & {PSNR$\uparrow$}                       & {SSIM$\uparrow$}                       & {LPIPS$\downarrow$}                     & {DreamSim$\downarrow$} & {DINO$\uparrow$} & {CLIP$\uparrow$} \\
+        \midrule
+        0\% (Top 16)            & 13.7768                                & 0.4400                                 & 0.2483                                  & 0.0616                 & 0.9599           & 0.9653           \\
+        25\% (Top 12)           & 13.7742                                & 0.4387                                 & 0.2473                                  & 0.0619                 & 0.9605           & 0.9650           \\
+        50\% (Top 8)            & 13.8404                                & 0.4419                                 & 0.2463                                  & 0.0636                 & 0.9596           & 0.9650           \\
+        75\% (Top 4)            & 13.9365                                & 0.4427                                 & 0.2464                                  & 0.0638                 & 0.9599           & 0.9646           \\
+        \bottomrule
+    \end{tabular}
+    \caption{LoFTR Filtering Analysis on RealBench: Effect of filtering output images based on correspondence score (Averaged over N=12 FP16 scenes from our run).}
+    \label{tab:loftr_filtering_ours}
+\end{table}
+
+\subsection{Evaluation on real-world data}
+\label{subsec:eval_on_real_world_data}
+To assess the generalization capabilities of RealFill beyond the curated RealBench dataset, we applied the fine-tuning and inference pipeline to a set of custom images. These samples were captured from a Shenzhen shopping mall. 3-5 images were chosen for each scene, taken at different luminosity levels and angles. Our objective was to observe how RealFill performs when faced with potentially different image characteristics (e.g., camera quality, lighting conditions, object types) compared to RealBench.
+
+\begin{figure}[H]
+    \centering
+    \begin{subfigure}[b]{0.24\linewidth}
+        \begin{subfigure}[b]{0.65\linewidth}
+            \includegraphics[width=\linewidth, height=3.355cm]{35/ref/1.png}
+        \end{subfigure}
+        \begin{subfigure}[b]{0.32\linewidth}
+            \includegraphics[width=\linewidth, height=1.0873cm]{35/ref/2.png}
+            \includegraphics[width=\linewidth, height=1.0983cm]{35/ref/3.png}
+            \includegraphics[width=\linewidth, height=1.0873cm]{35/ref/4.png}
+        \end{subfigure}
+        \caption{Reference Images}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}[b]{0.24\linewidth}
+        \centering
+        \includegraphics[width=3.355cm,height=3.355cm]{35/target/target.png}
+        \caption{Target + Mask}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}[b]{0.24\linewidth}
+        \centering
+        \includegraphics[width=\linewidth]{35/results/13.png}
+        \caption{RealFill Result}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}[b]{0.24\linewidth}
+        \centering
+        \includegraphics[width=3.355cm,height=3.355cm]{35/target/gt.png}
+        \caption{Ground Truth}
+    \end{subfigure}
+    \caption{RealFill applied to a custom scene involving an astronaut statue behind a shop display.}
+    \label{fig:custom_data_example}
+\end{figure}
+
+\begin{table}[H]
+    \centering
+    \setlength{\tabcolsep}{4pt} % Adjust column spacing
+    \sisetup{round-precision=3} % Ensure 3 decimal places consistent with report style
+    \begin{tabular}{@{} l S[table-format=2.3] S[table-format=1.3] S[table-format=1.3] S[table-format=1.3] S[table-format=1.3] S[table-format=1.3] @{}}
+        \toprule
+                                & \multicolumn{3}{c}{\textbf{low-level}} & \multicolumn{1}{c}{\textbf{mid-level}} & \multicolumn{2}{c}{\textbf{high-level}}                                                                \\
+        \cmidrule(lr){2-4} \cmidrule(lr){5-5} \cmidrule(lr){6-7}
+        \textbf{Dataset/Source} & {PSNR$\uparrow$}                       & {SSIM$\uparrow$}                       & {LPIPS$\downarrow$}                     & {DreamSim$\downarrow$} & {DINO$\uparrow$} & {CLIP$\uparrow$} \\
+        \midrule
+        RealBench (Paper, N=33) & 14.780                                 & 0.424                                  & 0.431                                   & 0.077                  & 0.948            & 0.962            \\
+        RealBench (Ours, N=12)  & 13.777                                 & 0.440                                  & 0.248                                   & 0.062                  & 0.960            & 0.965            \\
+        Custom (Ours, N=5)      & 13.883                                 & 0.369                                  & 0.404                                   & 0.116                  & 0.890            & 0.872            \\
+        \bottomrule
+    \end{tabular}
+    \caption{Comparison across datasets and sources (All results using FP16 for 'Ours').}
+    \label{tab:custom_vs_realbench}
+\end{table}
+
+The results on our custom landmark photos were generally mediocre. Taking the above as an example (Figure~\ref{fig:custom_data_example}), RealFill showed a commendable attempt at reproducing the art patterns despite some slight variations. However, RealFill also struggles on replicating glass reflections caused by the shop display window. Additionally, a duplicating glass frame is observed at the right side of the resulting image. In another scene, RealFill was incapable of generating closely packed leaves on a tree. For other tests, RealFill continued to make errors on lines, curves and texts.
+
+These experiments suggest that while RealFill's core mechanism generalizes, its performance remains closely tied to the quality, consistency, and informational content of provided reference sets. Factors like a significant domain shift (if custom data is very different from the pretraining data of Stable Diffusion) or poor reference image quality can pose challenges.
+
+\subsection{Discussion of potential improvements}
+\label{subsec:potential_improvements}
+Our analysis of RealFill's performance during reproduction and exploration highlights several potential avenues for future improvement.
+
+\textbf{Enhanced geometric reasoning.} The most apparent weakness is the lack of strong geometric guarantees, especially under large viewpoint shifts. Integrating techniques from multi-view geometry or Neural Radiance Fields (NeRFs) \cite{mildenhall2020nerf} more deeply into the diffusion process, perhaps by conditioning on geometric features or using a 3D-aware model, could lead to more structurally sound completions. The concurrent work FaithFill \cite{mallick2024faithfill} explores using NeRFs to generate views for fine-tuning, suggesting this is a promising direction.
+
+\textbf{Efficiency and zero-shot adaptation.} The per-scene fine-tuning requirement limits scalability. Research into reference encoders that can condition a base diffusion model on reference images at inference time, potentially achieving zero-shot or few-shot adaptation without explicit fine-tuning per scene, would be highly valuable \cite{yang2023paint}.
+
+\section{Proposed extension: ReFill}
+\label{sec:extension}
+Inspired by FaithFill \cite{mallick2024faithfill}, which proposed generating more reference images from a single real-world reference image, and the features of RealFill, which utilizes a few real-world reference images for image inpainting, we propose an extension named \textbf{ReFill}. We hypothesize that adding the best outputs from an initial fine-tuning to the training data can improve results. Therefore, we introduce a 2-stage training iterative approach that incorporates additional generated reference images with orientations close to the target, derived from real-world references. Our goal is for the model to learn better the shape and orientation of objects in the inpainting region. The primary motivation is to enhance the \emph{authenticity} and \emph{detail} of the generated content. By generating relevant images based on existing references, we expect the model to produce completions that are more consistent with the specific viewpoint and context of the target image, reducing issues from conflicting information.
+
+\subsection{Implementation details}
+\label{subsec:extension_implementation}
+Our extension pipeline consists of the following steps. First, we generate images using existing real-world reference images through the initial RealFill process. We then apply LoFTR filtering and ranking to identify high-quality generated images, which are then added as new references until the total number of references reaches 5. In the second RealFill pass, we utilize this enhanced reference set to obtain the final inpainting result. This iterative approach allows the model to learn and adapt based on the new reference images, improving the overall output quality.
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=\linewidth]{ext-pip.png}
+    \caption{Pipeline of our proposed extension ReFill}
+    \label{fig: extension_pipeline}
+\end{figure}
+
+\subsection{Experimental results and analysis}
+\label{subsec:ref_supplement_analysis}
+To evaluate the effectiveness of our extension ReFill, we conducted experiments comparing it against the original RealFill baseline results obtained during our reproduction phase (Section \ref{subsec:reproduction_results}). We focused the evaluation on a subset of N=4 randomly sampled scenes from the RealBench dataset. Both quantitative metrics and qualitative comparisons were used for analysis. Results are shown in Table \ref{tab:gen_comparison_realbench}.
+
+\begin{table}[H]
+    \centering
+    \setlength{\tabcolsep}{4pt} % Adjust column spacing
+    \sisetup{round-precision=3, table-format=2.3} % Reset precision
+    \begin{tabular}{@{} l S S[table-format=1.3] S[table-format=1.3] S[table-format=1.3] S[table-format=1.3] S[table-format=1.3] @{}}
+        \toprule
+                                        & \multicolumn{3}{c}{\textbf{low-level}} & \multicolumn{1}{c}{\textbf{mid-level}} & \multicolumn{2}{c}{\textbf{high-level}}                                                                \\
+        \cmidrule(lr){2-4} \cmidrule(lr){5-5} \cmidrule(lr){6-7}
+        \textbf{Methodology}            & {PSNR$\uparrow$}                       & {SSIM$\uparrow$}                       & {LPIPS$\downarrow$}                     & {DreamSim$\downarrow$} & {DINO$\uparrow$} & {CLIP$\uparrow$} \\
+        \midrule
+        RealFill (Ours)                 & 13.034                                 & 0.527                                  & 0.271                                   & 0.043                  & 0.978            & 0.969            \\
+        \textbf{ReFill (Our extension)} & \textbf{13.331}                        & \textbf{0.538}                         & \textbf{0.258}                          & \textbf{0.041}         & \textbf{0.978}   & \textbf{0.967}   \\
+        \bottomrule
+    \end{tabular}
+    \caption{Performance of \emph{ReFill}, versus original RealFill, on the RealBench dataset (Average over N=4 common FP16 scenes).}
+    \label{tab:gen_comparison_realbench}
+\end{table}
+
+% --- Extension Qualitative Comparison Figure ---
+\begin{figure}[H]
+    \begin{subfigure}[b]{0.19\linewidth}
+        \begin{subfigure}[b]{0.65\linewidth}
+            \includegraphics[width=\linewidth, height=2.655cm]{Ext-13/ref/2.png}
+        \end{subfigure}
+        \begin{subfigure}[b]{0.32\linewidth}
+            \includegraphics[width=\linewidth]{Ext-13/ref/1.png}
+            \includegraphics[width=\linewidth]{Ext-13/ref/0.png}
+        \end{subfigure}
+        \caption{Reference Images}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}[b]{0.19\textwidth}
+        \centering
+        \includegraphics[width=\linewidth]{Ext-13/target.png}
+        \caption{Target + mask}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}[b]{0.19\textwidth}
+        \centering
+        \includegraphics[width=\linewidth]{Ext-13/13R.png}
+        \caption{Original RealFill}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}[b]{0.19\textwidth}
+        \centering
+        \includegraphics[width=\linewidth]{Ext-13/13E.png}
+        \caption{Our Extension}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}[b]{0.19\textwidth}
+        \centering
+        \includegraphics[width=\linewidth]{Ext-13/13gt.png}
+        \caption{Ground Truth}
+    \end{subfigure}
+    \caption{Qualitative comparison for RealBench Scene 13: (a) Real-world Refs. (b) Target + Mask. (c) Result from baseline RealFill reproduction. (d) Result from our proposed extension. (e) Ground truth.}
+    \label{fig:extension_qualitative}
+\end{figure}
+
+\textbf{Quantitative results.} The results in Table \ref{tab:gen_comparison_realbench} indicate that our extension performs slightly better than RealFill on low and mid-level metrics. Specifically, improvements are observed in PSNR (13.331 vs. 13.034) and SSIM (0.538 vs. 0.527), suggesting enhanced pixel-level fidelity in the masked region. Meanwhile, LPIPS and DreamSim scores decreased slightly (0.258 vs. 0.271 and 0.041 vs. 0.043, respectively), indicating minimal change in perceptual similarity. High-level metrics, DINO and CLIP, remained largely unchanged, demonstrating compatibility with high-level assessments. Overall, these results suggest a positive trend in low and mid-level performance while maintaining consistent high-level outcomes.
+
+\textbf{Qualitative results.}
+Qualitative comparison for Scene 13 (Figure \ref{fig:extension_qualitative}) suggests subtle improvements with our extension. Compared to the baseline RealFill result (c), our extension's output (d) appears to render the blue edges of the background curtain with slightly better definition. Furthermore, the wood grain texture on the base seems marginally more detailed in (d), potentially capturing the fidelity seen in the ground truth (e) more closely than the baseline's rendition. While both results are coherent, the extension demonstrates minor visual gains in sharpness and texture detail in this specific example, bringing it slightly closer to the ground truth appearance.
+
+\textbf{Discussion.}
+While our extension ReFill shows potential for minor improvements based on the metrics and qualitative examples, it is important to consider the trade-off with increased computation time required for generating initial candidates and performing a second fine-tuning stage, approximately doubling the per-scene fine-tuning duration compared to the baseline RealFill. The reference augmentation step, guided by LoFTR-based selection of initially generated images, aimed to provide the model with better contextual information, potentially closer to the target view. However, the observed benefits, while sometimes positive in certain metrics and visually subtle (as seen in Figure \ref{fig:extension_qualitative}), were generally marginal overall. One potential reason is that the LoFTR-ranked generated images, while visually plausible, may not have provided sufficient \emph{novel} geometric or textural information specifically relevant to the masked region compared to the diversity present in the original real-world references. Furthermore, LoFTR operates as a 2D feature matcher \cite{sun2021loftr}, which might not be the optimal criterion for selecting views that best inform a 3D-aware completion task, unlike methods designed with explicit 3D geometric awareness \cite{wang2024dust3r}. Consequently, the results did not translate into significant improvements in perceptual quality across all scenes, nor did they fundamentally resolve challenging geometric inconsistencies inherent in the base RealFill method. Future work could explore optimizing the selection criteria for augmented references, e.g. by using a 3D geometry-aware feature matcher, or investigate more efficient ways to integrate such information to better balance computational cost and quality gains.
+
+\section{Conclusion}
+\label{sec:conclusion}
+
+This project involved reproducing and analyzing RealFill \cite{tang2024realfill}, a reference-driven method for authentic image completion. In addition to reproducing RealFill, we evaluated its behavior under different conditions to better understand its strengths and limitations. While the method preserves object appearance using reference images, it struggles with 3D geometry, especially under large viewpoint changes or complex shapes. Performance heavily depends on the quality and diversity of reference views; when references lack detail or cover poor perspectives, the model produces ambiguous results.
+
+To address potential improvements in detail and faithfulness, we proposed \emph{ReFill}, an extension involving a two-stage iterative refinement. Initial RealFill outputs were ranked using LoFTR \cite{sun2021loftr} correspondences, and the highest-ranked generated images augmented the reference set for a subsequent fine-tuning pass. While experiments showed minor improvements in some metrics, the overall gains were marginal and incurred significant computational overhead. Our findings suggest that simply augmenting with LoFTR-selected 2D views is insufficient to overcome the core challenge of 3D reasoning. Future work should prioritize incorporating explicit geometric priors or exploring more efficient adaptation mechanisms.
+
+% --- Acknowledgements ---
+\begin{ack}
+    We extend our gratitude to Prof. Kai Han and Mr. Weining Ren for their invaluable guidance, insightful feedback and support throughout the APAI3010/STAT3010 course project at The University of Hong Kong. Their expertise was instrumental in shaping our research direction and overcoming challenges. We acknowledge the use of free computational resources provided by Google Colab, which were essential for conducting the fine-tuning. Moreover, our implementation heavily builds upon the unofficial RealFill implementation released by \href{https://github.com/thuanz123/realfill}{\texttt{thuanz123}} and several outstanding open-source libraries, including PyTorch, Diffusers \cite{vonplaten2022diffusers}, Transformers \cite{wolf2020transformers}, PEFT \cite{peft}, Kornia \cite{riba2020kornia}, Accelerate \cite{accelerate}, LPIPS \cite{zhang2018unreasonable}, and DreamSim \cite{fu2023dreamsim}. We thank the creators and maintainers of these invaluable tools.
+\end{ack}
+
+% --- References ---
+{
+\small % Optional: makes reference list smaller
+
+\begin{thebibliography}{99} % Adjust '20' if you have more references
+    % how much horizontal space it should reserve for the reference labels
+
+    \bibitem{tang2024realfill}
+    Tang, L., Ruiz, N., Chu, Q., Li, Y., Hołyński, A., Jacobs, D. E., Hariharan, B., Pritch, Y., Wadhwa, N., Aberman, K.,
+    Rubinstein, M. (2024).
+    RealFill: Reference-Driven Generation for Authentic Image Completion.
+    \textit{ACM Transactions on Graphics (TOG)}, 43(4), Article 135. Presented at SIGGRAPH 2024.
+
+    \bibitem{hu2022lora}
+    Hu, E. J., Shen, Y., Wallis, P., Allen-Zhu, Z., Li, Y., Wang, S., Wang, L.,
+    Chen, W. (2022).
+    LoRA: Low-Rank Adaptation of Large Language Models.
+    In \textit{International Conference on Learning Representations (ICLR)}.
+
+    \bibitem{sun2021loftr}
+    Sun, J., Shen, Z., Wang, Y., Bao, H., Zhou, X. (2021).
+    LoFTR: Detector-Free Local Feature Matching with Transformers.
+    In \textit{Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR)} (pp. 8922-8931).
+
+    \bibitem{rombach2022high}
+    Rombach, R., Blattmann, A., Lorenz, D., Esser, P., Ommer, B. (2022).
+    High-Resolution Image Synthesis With Latent Diffusion Models.
+    In \textit{Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR)} (pp. 10684-10695).
+
+    \bibitem{ho2020denoising}
+    Ho, J., Jain, A.,
+    Abbeel, P. (2020).
+    Denoising diffusion probabilistic models.
+    In \textit{Advances in Neural Information Processing Systems (NeurIPS)}, 33, 6840-6851.
+
+    \bibitem{mildenhall2020nerf}
+    Mildenhall, B., Srinivasan, P. P., Tancik, M., Barron, J. T., Ramamoorthi, R.,
+    Ng, R. (2020).
+    NeRF: Representing Scenes as Neural Radiance Fields for View Synthesis.
+    In \textit{European Conference on Computer Vision (ECCV)} (pp. 405-421). Springer, Cham.
+
+    \bibitem{mallick2024faithfill}
+    Mallick, R., Abdalla, A., Bargal, S. A. (2024).
+    FaithFill: Faithful Inpainting for Object Completion Using a Single Reference Image.
+    \textit{arXiv preprint arXiv:2406.07865}.
+
+    \bibitem{yang2023paint}
+    Yang, B., Gu, S., Zhang, B., Zhang, T., Chen, X., Sun, X., Chen, D.,
+    Wen, F. (2023).
+    Paint by Example: Exemplar-based Image Editing with Diffusion Models.
+    In \textit{Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR)} (pp. 18381-18391).
+
+    \bibitem{zhang2018unreasonable}
+    Zhang, R., Isola, P., Efros, A. A., Shechtman, E.,
+    Wang, O. (2018).
+    The unreasonable effectiveness of deep features as a perceptual metric.
+    In \textit{Proceedings of the IEEE Conference on Computer Vision and Pattern Recognition (CVPR)} (pp. 586-595).
+
+    \bibitem{fu2023dreamsim}
+    Fu, S., Tamir, N. Y., Sundaram, S., Chai, L., Zhang, R., Dekel, T.,
+    Isola, P. (2023).
+    DreamSim: Learning new dimensions of human visual similarity using synthetic data.
+    In \textit{Advances in Neural Information Processing Systems (NeurIPS)}, 36.
+
+    \bibitem{vonplaten2022diffusers}
+    von Platen, P., Patil, S., Lozhkov, A., Cuenca, P., Lambert, N., Rasul, K., ...
+    Wolf, T. (2022).
+    Diffusers: State-of-the-art diffusion models.
+    \url{https://github.com/huggingface/diffusers}
+
+    \bibitem{xFormers2022}
+    Lefaudeux, B., Massa, F., Liskovich, D., Xiong, W., Caggiano, V., Naren, S., Xu, M., Hu, J., Tintore, M., Zhang, S., Labatut, P., Haziza, D., Wehrstedt, L., Reizenstein, J., Sizov, G. (2022).
+    xFormers: A modular and hackable Transformer modelling library.
+    \url{https://github.com/facebookresearch/xformers}.
+
+    \bibitem{goodfellow2014generative}
+    Goodfellow, I., Pouget-Abadie, J., Mirza, M., Xu, B., Warde-Farley, D., Ozair, S., ...
+    Bengio, Y. (2014).
+    Generative adversarial nets.
+    In \textit{Advances in neural information processing systems (NeurIPS)}, 27.
+
+    \bibitem{song2021scorebased}
+    Song, Y., Sohl-Dickstein, J., Kingma, D. P., Kumar, A., Ermon, S., Poole, B. (2021). % Authors (keep Middle Initial for Kingma), Year
+    Score-Based Generative Modeling through Stochastic Differential Equations. % Title (Corrected capitalization)
+    In \textit{International Conference on Learning Representations (ICLR)}. % Venue (Standard name for ICLR)
+    OpenReview.net.
+    \url{https://openreview.net/forum?id=PxTIG12RRHS}
+
+    \bibitem{wolf2020transformers}
+    Wolf, T., Debut, L., Sanh, V., Chaumond, J., Delangue, C., Moi, A., ...
+    Rush, A. M. (2020).
+    Transformers: State-of-the-art natural language processing.
+    In \textit{Proceedings of the 2020 Conference on Empirical Methods in Natural Language Processing: System Demonstrations} (pp. 38-45).
+
+    \bibitem{peft}
+    Mangrulkar, S., Gugger, S., Debut, L., Belkada, Y., Paul, S., Bossan, B. (2022).
+    PEFT: State-of-the-art Parameter-Efficient Fine-Tuning methods.
+    \url{https://github.com/huggingface/peft}
+
+    \bibitem{riba2020kornia}
+    Riba, E., Mishkin, D., Ponsa, D., Rublee, E., Bradski, G. (2020).
+    Kornia: an Open Source Differentiable Computer Vision Library for PyTorch.
+    In \textit{Proceedings of the IEEE/CVF Winter Conference on Applications of Computer Vision (WACV)} (pp. 3674-3683).
+
+    \bibitem{accelerate}
+    Gugger, S., Debut, L., Wolf, T., Schmid, P., Mueller, Z., Mangrulkar, S., Sun, M., Bossan, B. (2022).
+    Accelerate: Training and inference at scale made simple, efficient and adaptable.
+    \url{https://github.com/huggingface/accelerate}
+
+    \bibitem{ansel2024pytorch}
+    Ansel, J., Yang, E., He, H., Gimelshein, N., Jain, A., Voznesensky, M., et al. (2024).
+    PyTorch 2: Faster machine learning through dynamic Python bytecode transformation and graph compilation.
+    In \textit{29th ACM International Conference on Architectural Support for Programming Languages and Operating Systems, Volume 2 (ASPLOS '24)}. ACM.
+    \url{https://pytorch.org/assets/pytorch2-2.pdf}
+
+    \bibitem{dettmers2021_8bit}
+    Dettmers, T., Lewis, M., Shleifer, S., Zettlemoyer, L. (2021).
+    8-bit Optimizers via Block-wise Quantization.
+    \textit{arXiv preprint arXiv:2110.02861}.
+    \url{https://arxiv.org/abs/2110.02861}
+
+    \bibitem{caron2021emerging}
+    Caron, M., Touvron, H., Misra, I., J\'egou, H., Mairal, J., Bojanowski, P., Joulin, A. (2021).
+    Emerging Properties in Self-Supervised Vision Transformers.
+    In \textit{Proceedings of the International Conference on Computer Vision (ICCV)}.
+
+    \bibitem{radford2021clip}
+    Radford, A., Kim, J. W., Hallacy, C., Ramesh, A., Goh, G., Agarwal, S., Sastry, G., Askell, A., Mishkin, P., Clark, J., Krueger, G., Sutskever, I. (2021).
+    Learning Transferable Visual Models From Natural Language Supervision.
+    \textit{arXiv preprint arXiv:2103.00020}.
+    \url{https://arxiv.org/abs/2103.00020}
+
+    \bibitem{wang2024dust3r}
+    Wang, S., Leroy, V., Cabon, Y., Chidlovskii, B., Revaud, J. (2024). % Using 2024 as per arXiv v3 date
+    DUSt3R: Geometric 3D Vision Made Easy.
+    \textit{arXiv preprint arXiv:2312.14132}.
+
+\end{thebibliography}
+} % End small font scope
+
+% --- Appendix ---
+\appendix % This command marks the start of the appendix sections
+
+\section{Appendix}
+
+\subsection{Work split} % Create a new section for the appendix
+\label{appendix:work_split} % Optional: Add a label for cross-referencing
+
+The contributions of each team member to this project are outlined below:
+
+\begin{center}
+    % --- Define Column Widths ---
+    \newlength{\membercolwidthB} % Use new names to avoid conflict if run multiple times
+    \newlength{\contribcolwidthB}
+    \setlength{\membercolwidthB}{0.25\linewidth} % Adjust fraction as needed
+    \setlength{\contribcolwidthB}{\dimexpr\linewidth-\membercolwidthB-2\tabcolsep\relax}
+
+    % --- Create the Table ---
+    \begin{tabular}{@{} p{\membercolwidthB} p{\contribcolwidthB} @{}}
+        \toprule
+        \textbf{Member Name (UID)}        & \textbf{Primary Contributions}                                                                                                                                                             \\
+        \midrule
+        Cheng Ho Ming (3036216734)        &
+        % Wrap itemize in a top-aligned minipage
+        \begin{minipage}[t]{\linewidth} % [t] aligns top, \linewidth refers to column width
+            \begin{itemize}[topsep=0pt, partopsep=0pt, itemsep=0pt, parsep=0pt, leftmargin=*, after=\strut]
+                \item Project management (timeline, tasks)
+                \item Codebase adaptation (adapting forked repository for Google Colab, project requirements)
+                \item Literature review
+                \item Coded and integrated \emph{ReFill} extension
+                \item Executed final benchmarking evaluations
+                \item Optimized report's LaTeX layout
+            \end{itemize}
+        \end{minipage}                                                                                                                                                               \\ % End minipage
+        \midrule
+        Chung Shing Hei (3036216760)      &
+        \begin{minipage}[t]{\linewidth}
+            \begin{itemize}[topsep=0pt, partopsep=0pt, itemsep=0pt, parsep=0pt, leftmargin=*, after=\strut]
+                \item Formulated \emph{ReFill} hypothesis and methodology
+                \item Streamlined Google Colab experimental process
+                \item Refined benchmarking scripts
+            \end{itemize}
+        \end{minipage}                                                                                                                                                                                                 \\
+        \midrule
+        Chan Hin Chun Jensen (3036218017) &
+        \begin{minipage}[t]{\linewidth}
+            \begin{itemize}[topsep=0pt, partopsep=0pt, itemsep=0pt, parsep=0pt, leftmargin=*, after=\strut]
+                \item Acquired and prepared custom dataset (masking, Ground Truth generation)
+                \item Developed initial benchmarking code structure
+            \end{itemize}
+        \end{minipage}                                                                                                                                                                                                 \\
+        \midrule
+        All Members                       &                                                                                                                                                                                            % Plain text, no minipage needed unless complex formatting arises
+        Collaborated on: Extension concept refinement, experimental runs, full benchmarking process (development, execution, analysis), results analysis and discussion, presentation preparation, final report drafting and revision. \\
+        \bottomrule
+    \end{tabular}
+\end{center}
+
+\subsection{Additional reproduction results}
+\label{appendix:additional_reproduction}
+\begin{figure}[H]
+    \centering
+    \begin{subfigure}[b]{0.24\linewidth}
+        \includegraphics[width=\linewidth]{16/ref/0.png}
+        \begin{subfigure}[b]{0.49\linewidth}
+            \includegraphics[width=\linewidth]{16/ref/1.png}
+        \end{subfigure}
+        \begin{subfigure}[b]{0.49\linewidth}
+            \includegraphics[width=\linewidth]{16/ref/2.png}
+        \end{subfigure}
+        \caption{Reference Images}
+    \end{subfigure}
+    \hfill
+    \centering
+    \begin{subfigure}[b]{0.24\linewidth}
+        \includegraphics[width=\linewidth]{16/target/target.png}
+        \caption{Target + mask}
+    \end{subfigure}
+    \hfill
+    \centering
+    \begin{subfigure}[b]{0.24\linewidth}
+        \includegraphics[width=\linewidth]{16/results/0.png}
+        \caption{Our Reproduction}
+    \end{subfigure}
+    \begin{subfigure}[b]{0.24\linewidth}
+        \includegraphics[width=\linewidth]{16/target/gt.png}
+        \caption{Ground Truth}
+    \end{subfigure}
+    \caption{Qualitative comparison for RealBench Scene 16: (a) Reference Images. (b) Target + Mask. (c) Result from RealFill reproduction. (d) Ground truth.}
+    \label{fig:additional_reproduction_16}
+\end{figure}
+
+\begin{figure}[H]
+    \centering
+    \begin{subfigure}[b]{0.24\linewidth}
+        \includegraphics[width=\linewidth]{26/ref/0.png}
+        \begin{subfigure}[t]{0.49\linewidth}
+            \includegraphics[width=\linewidth]{26/ref/1.png}
+        \end{subfigure}
+        \begin{subfigure}[b]{0.49\linewidth}
+            \includegraphics[width=\linewidth]{26/ref/2.png}
+        \end{subfigure}
+        \caption{Reference Images}
+    \end{subfigure}
+    \hfill
+    \centering
+    \begin{subfigure}[b]{0.24\linewidth}
+        \includegraphics[width=\linewidth]{26/target/target.png}
+        \caption{Target + mask}
+    \end{subfigure}
+    \hfill
+    \centering
+    \begin{subfigure}[b]{0.24\linewidth}
+        \includegraphics[width=\linewidth]{26/results/0.png}
+        \caption{Our Reproduction}
+    \end{subfigure}
+    \begin{subfigure}[b]{0.24\linewidth}
+        \includegraphics[width=\linewidth]{26/target/gt.png}
+        \caption{Ground Truth}
+    \end{subfigure}
+    \caption{Qualitative comparison for RealBench Scene 26: (a) Reference Images. (b) Target + Mask. (c) Result from RealFill reproduction. (d) Ground truth.}
+    \label{fig:additional_reproduction_26}
+\end{figure}
+
+% Scene 30
+\begin{figure}[H]
+    \centering
+    \begin{minipage}[b]{0.24\textwidth}
+        \centering
+        % Two images stacked vertically
+        \includegraphics[width=\textwidth, height=0.495\textwidth]{30/ref/1.png}
+        \includegraphics[width=\textwidth, height=0.495\textwidth]{30/ref/0.png}
+        \caption*{(a) Reference Images}
+    \end{minipage}\hfill%
+    \begin{minipage}[b]{0.24\textwidth}
+        \centering
+        \includegraphics[width=\textwidth]{30/target/target.png}
+        \caption*{(b) Target + mask}
+    \end{minipage}\hfill%
+    \begin{minipage}[b]{0.24\textwidth}
+        \centering
+        \includegraphics[width=\textwidth]{30/results/10.png}
+        \caption*{(c) Our Reproduction}
+    \end{minipage}\hfill%
+    \begin{minipage}[b]{0.24\textwidth}
+        \centering
+        \includegraphics[width=\textwidth]{30/target/gt.png}
+        \caption*{(d) Ground Truth}
+    \end{minipage}
+    \caption{Qualitative comparison for RealBench Scene 30: (a) Reference Images. (b) Target + Mask. (c) Result from RealFill reproduction. (d) Ground truth.}
+    \label{fig:reproduction_qualitative_fail}
+\end{figure}
+
+\subsection{Additional extension results}
+\label{appendix:additional_extension}
+
+% Scene 5
+\begin{figure}[H]
+    \centering
+    \begin{minipage}[t]{0.19\textwidth}
+        \centering
+        % Left-right arrangement for top reference images
+        \begin{minipage}[b]{0.48\textwidth}
+            \centering
+            \includegraphics[width=\textwidth]{Ext-5/ref/2.png}
+        \end{minipage}\hfill
+        \begin{minipage}[b]{0.48\textwidth}
+            \centering
+            % Two stacked images
+            \includegraphics[width=\textwidth]{Ext-5/ref/1.png}
+            \includegraphics[width=\textwidth]{Ext-5/ref/0.png}
+        \end{minipage}
+        \caption*{(a) Real-world References}
+    \end{minipage}\hfill%
+    \begin{minipage}[t]{0.19\textwidth}
+        \centering
+        \includegraphics[width=\textwidth]{Ext-5/target.png}
+        \caption*{(b) Target + mask}
+    \end{minipage}\hfill%
+    \begin{minipage}[t]{0.19\textwidth}
+        \centering
+        \includegraphics[width=\textwidth]{Ext-5/5R.png}
+        \caption*{(c) Original RealFill}
+    \end{minipage}\hfill%
+    \begin{minipage}[t]{0.19\textwidth}
+        \centering
+        \includegraphics[width=\textwidth]{Ext-5/5E.png}
+        \caption*{(d) Our Extension}
+    \end{minipage}\hfill%
+    \begin{minipage}[t]{0.19\textwidth}
+        \centering
+        \includegraphics[width=\textwidth]{Ext-5/gt.png}
+        \caption*{(e) Ground Truth}
+    \end{minipage}
+    \caption{Qualitative comparison for RealBench Scene 5: (a) Real-world Refs. (b) Target + Mask. (c) Result from baseline RealFill reproduction. (d) Result from our proposed extension. (e) Ground truth.}
+\end{figure}
+
+% Scene 11
+\begin{figure}[H]
+    \centering
+    \begin{minipage}[b]{0.19\textwidth}
+        \centering
+        % Two images stacked vertically
+        \includegraphics[width=\textwidth, height=0.495\textwidth]{11/ref/1.png}
+        \includegraphics[width=\textwidth, height=0.495\textwidth]{11/ref/0.png}
+        \caption*{(a) Reference Images}
+    \end{minipage}\hfill%
+    \begin{minipage}[b]{0.19\textwidth}
+        \centering
+        \includegraphics[width=\textwidth]{Ext-11/target.png}
+        \caption*{(b) Target + mask}
+    \end{minipage}\hfill%
+    \begin{minipage}[b]{0.19\textwidth}
+        \centering
+        \includegraphics[width=\textwidth]{Ext-11/11R.png}
+        \caption*{(c) Original RealFill}
+    \end{minipage}\hfill%
+    \begin{minipage}[b]{0.19\textwidth}
+        \centering
+        \includegraphics[width=\textwidth]{Ext-11/11E.png}
+        \caption*{(d) Our Extension}
+    \end{minipage}\hfill%
+    \begin{minipage}[b]{0.19\textwidth}
+        \centering
+        \includegraphics[width=\textwidth]{Ext-11/gt.png}
+        \caption*{(e) Ground Truth}
+    \end{minipage}
+    \caption{Qualitative comparison for RealBench Scene 11: (a) Real-world Refs. (b) Target + Mask. (c) Result from baseline RealFill reproduction. (d) Result from our proposed extension. (e) Ground truth.}
+\end{figure}
+
+% Scene 12
+\begin{figure}[H]
+    \centering
+    \begin{minipage}[b]{0.19\textwidth}
+        \centering
+        % Two images stacked vertically
+        \includegraphics[width=\textwidth, height=0.495\textwidth]{12/ref/1.png}
+        \includegraphics[width=\textwidth, height=0.495\textwidth]{12/ref/0.png}
+        \caption*{(a) Reference Images}
+    \end{minipage}\hfill%
+    \begin{minipage}[b]{0.19\textwidth}
+        \centering
+        \includegraphics[width=\textwidth]{Ext-12/target.png}
+        \caption*{(b) Target + mask}
+    \end{minipage}\hfill%
+    \begin{minipage}[b]{0.19\textwidth}
+        \centering
+        \includegraphics[width=\textwidth]{Ext-12/12R.png}
+        \caption*{(c) Original RealFill}
+    \end{minipage}\hfill%
+    \begin{minipage}[b]{0.19\textwidth}
+        \centering
+        \includegraphics[width=\textwidth]{Ext-12/12E.png}
+        \caption*{(d) Our Extension}
+    \end{minipage}\hfill%
+    \begin{minipage}[b]{0.19\textwidth}
+        \centering
+        \includegraphics[width=\textwidth]{Ext-12/gt.png}
+        \caption*{(e) Ground Truth}
+    \end{minipage}
+    \caption{Qualitative comparison for RealBench Scene 12: (a) Real-world Refs. (b) Target + Mask. (c) Result from baseline RealFill reproduction. (d) Result from our proposed extension. (e) Ground truth.}
+\end{figure}
+
+\end{document}
