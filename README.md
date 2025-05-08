@@ -119,6 +119,8 @@ This project involved:
 
     > ⚠️ **GPU Acceleration (PyTorch):**
     > The `requirements.txt` file installs the **CPU-only** version of PyTorch by default to ensure basic compatibility. For GPU acceleration (highly recommended for training and faster inference/benchmarking), you **must manually install the appropriate GPU-enabled version** of PyTorch matching your CUDA version *after* installing requirements.
+    > For example, if you have CUDA 12.8 installed, run:
+    > `pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128`
     > Visit the [official PyTorch installation guide](https://pytorch.org/get-started/locally/) for instructions.
 
 4. **Dataset:**
