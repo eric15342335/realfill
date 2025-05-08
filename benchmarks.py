@@ -1,32 +1,33 @@
 # benchmarks.py
 
 import argparse
+import json
+import multiprocessing
 import multiprocessing.queues
 import os
 import re
-import json
 import subprocess
-import time
-from pathlib import Path
-from collections import defaultdict, OrderedDict
-import pandas as pd
-import numpy as np
-from tqdm import tqdm
-import multiprocessing
 import sys
+import time
 import traceback
+from collections import OrderedDict, defaultdict
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+from rich.console import Console, Group
 
 # Rich library imports for enhanced terminal UI
 from rich.live import Live
 from rich.progress import (
+    BarColumn,
     Progress,
     SpinnerColumn,
-    BarColumn,
     TextColumn,
     TimeElapsedColumn,
     TimeRemainingColumn,
 )
-from rich.console import Console, Group
+from tqdm import tqdm
 
 # --- Configuration & Constants ---
 METRICS_CONFIG = OrderedDict(

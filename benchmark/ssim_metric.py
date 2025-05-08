@@ -4,9 +4,9 @@
 import argparse
 import json
 import os
-from pathlib import Path
-import time
 import sys
+import time
+from pathlib import Path
 
 # math is not directly used by SSIM usually, but good to have if variations are considered
 

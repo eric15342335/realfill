@@ -1,16 +1,17 @@
 # loftr_ranking.py
 # (Keep imports and LoFTRMatcher class as they are)
-import os
-import json
-import torch
-import kornia as K
-import kornia.feature as KF
-from pathlib import Path
+import argparse
 import glob
+import json
+import os
 import re
 import shutil
-import argparse
 import time  # Added for timestamping cache/ranking
+from pathlib import Path
+
+import kornia as K
+import kornia.feature as KF
+import torch
 
 # --- Default Configuration ---
 DEFAULT_LOFTR_MODEL = "outdoor"

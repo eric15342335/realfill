@@ -3,11 +3,11 @@
 # --- Lightweight Imports First ---
 import argparse
 import json
-import os
-from pathlib import Path
-import time
-import sys
 import math  # For log10
+import os
+import sys
+import time
+from pathlib import Path
 
 # --- Constants (Lightweight) ---
 DEFAULT_NUM_IMAGES = 16

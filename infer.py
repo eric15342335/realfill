@@ -2,8 +2,8 @@ import argparse
 import os
 
 import torch
+from diffusers import DDPMScheduler, StableDiffusionInpaintPipeline, UNet2DConditionModel
 from PIL import Image, ImageFilter
-from diffusers import StableDiffusionInpaintPipeline, UNet2DConditionModel, DDPMScheduler
 from transformers import CLIPTextModel
 
 parser = argparse.ArgumentParser(description="Inference")
