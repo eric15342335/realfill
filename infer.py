@@ -3,11 +3,7 @@ import os
 
 import torch
 from PIL import Image, ImageFilter
-from diffusers import (
-    StableDiffusionInpaintPipeline, 
-    UNet2DConditionModel,
-    DDPMScheduler
-)
+from diffusers import StableDiffusionInpaintPipeline, UNet2DConditionModel, DDPMScheduler
 from transformers import CLIPTextModel
 
 parser = argparse.ArgumentParser(description="Inference")
@@ -44,16 +40,14 @@ args = parser.parse_args()
 
 if __name__ == "__main__":
     os.makedirs(args.output_dir, exist_ok=True)
-    generator = None 
+    generator = None
 
     expected_size = (512, 512)
 
     # create & load model
     weights_dtype = torch.float32
     pipe = StableDiffusionInpaintPipeline.from_pretrained(
-        "stabilityai/stable-diffusion-2-inpainting",
-        torch_dtype=weights_dtype,
-        revision=None
+        "stabilityai/stable-diffusion-2-inpainting", torch_dtype=weights_dtype, revision=None
     )
 
     pipe.unet = UNet2DConditionModel.from_pretrained(
@@ -69,10 +63,12 @@ if __name__ == "__main__":
         generator = torch.Generator(device="cuda").manual_seed(args.seed)
 
     try:
-        image = Image.open(args.validation_image).convert("RGB") # Ensure RGB
-        mask_image = Image.open(args.validation_mask).convert("L") # Ensure Grayscale
+        image = Image.open(args.validation_image).convert("RGB")  # Ensure RGB
+        mask_image = Image.open(args.validation_mask).convert("L")  # Ensure Grayscale
     except FileNotFoundError:
-        print(f"Error: Cannot find image '{args.validation_image}' or mask '{args.validation_mask}'")
+        print(
+            f"Error: Cannot find image '{args.validation_image}' or mask '{args.validation_mask}'"
+        )
         exit(1)
     except Exception as e:
         print(f"Error loading images: {e}")
@@ -95,11 +91,16 @@ if __name__ == "__main__":
 
     for idx in range(16):
         result = pipe(
-            prompt="a photo of sks", image=image, mask_image=mask_image, 
-            num_inference_steps=200, guidance_scale=1, generator=generator, 
-            height=expected_size[1], width=expected_size[0],
+            prompt="a photo of sks",
+            image=image,
+            mask_image=mask_image,
+            num_inference_steps=200,
+            guidance_scale=1,
+            generator=generator,
+            height=expected_size[1],
+            width=expected_size[0],
         ).images[0]
-        
+
         result = Image.composite(result, image, mask_image)
         result.save(f"{args.output_dir}/{idx}.png")
 

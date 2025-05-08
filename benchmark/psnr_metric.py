@@ -80,7 +80,9 @@ def calculate_psnr_masked(ground_truth, generated, mask):
 
 def get_cache_path(cache_dir, results_dir_name):
     """Constructs the path for the cache file."""
-    return Path(cache_dir) / "per_scene_cache" / "psnr_masked" / f"{results_dir_name}.json"  # Use _masked suffix
+    return (
+        Path(cache_dir) / "per_scene_cache" / "psnr_masked" / f"{results_dir_name}.json"
+    )  # Use _masked suffix
 
 
 def load_cache(cache_file, gt_mtime_current, mask_mtime_current):
@@ -137,7 +139,12 @@ def save_cache(cache_file, data, gt_mtime, mask_mtime):
 
 # --- Main Function ---
 def calculate_scene_psnr(
-    gt_path_str, mask_path_str, results_dir_str, cache_dir_str, num_images=DEFAULT_NUM_IMAGES, target_size=TARGET_SIZE
+    gt_path_str,
+    mask_path_str,
+    results_dir_str,
+    cache_dir_str,
+    num_images=DEFAULT_NUM_IMAGES,
+    target_size=TARGET_SIZE,
 ):
     """
     Calculates the average masked PSNR for a given scene.
@@ -184,7 +191,9 @@ def calculate_scene_psnr(
 
         # Resize if target_size is specified
         if target_size:
-            gt_image = cv2.resize(gt_image, target_size, interpolation=cv2.INTER_LINEAR)  # Use quality interpolation
+            gt_image = cv2.resize(
+                gt_image, target_size, interpolation=cv2.INTER_LINEAR
+            )  # Use quality interpolation
             # IMPORTANT: Use nearest neighbor for mask to avoid introducing gray values
             mask_image = cv2.resize(mask_image, target_size, interpolation=cv2.INTER_NEAREST)
 
@@ -205,7 +214,9 @@ def calculate_scene_psnr(
     valid_image_count = 0
     per_image_scores = {}
 
-    image_files = sorted([p for p in results_dir.glob("*.png") if p.stem.isdigit()], key=lambda x: int(x.stem))
+    image_files = sorted(
+        [p for p in results_dir.glob("*.png") if p.stem.isdigit()], key=lambda x: int(x.stem)
+    )
     image_files = image_files[:num_images]
 
     if not image_files:
@@ -228,7 +239,9 @@ def calculate_scene_psnr(
                 if target_size:
                     # Ensure generated image matches GT size for comparison
                     if gen_image.shape[:2] != target_size[::-1]:  # OpenCV size is (W, H)
-                        gen_image = cv2.resize(gen_image, target_size, interpolation=cv2.INTER_LINEAR)
+                        gen_image = cv2.resize(
+                            gen_image, target_size, interpolation=cv2.INTER_LINEAR
+                        )
 
                 psnr_value = calculate_psnr_masked(gt_image, gen_image, mask_image)
 
@@ -254,7 +267,11 @@ def calculate_scene_psnr(
     average_psnr = total_psnr / valid_image_count
 
     # --- Save to Cache ---
-    cache_data = {"average": average_psnr, "per_image": per_image_scores, "count": valid_image_count}
+    cache_data = {
+        "average": average_psnr,
+        "per_image": per_image_scores,
+        "count": valid_image_count,
+    }
     save_cache(cache_file, cache_data, gt_mtime, mask_mtime)
 
     return average_psnr
@@ -262,13 +279,25 @@ def calculate_scene_psnr(
 
 # --- Command Line Interface ---
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Calculate Masked PSNR for a RealFill result scene.")
-    parser.add_argument("--gt_path", type=str, required=True, help="Path to the ground truth image.")
+    parser = argparse.ArgumentParser(
+        description="Calculate Masked PSNR for a RealFill result scene."
+    )
+    parser.add_argument(
+        "--gt_path", type=str, required=True, help="Path to the ground truth image."
+    )
     parser.add_argument("--mask_path", type=str, required=True, help="Path to the mask image.")
     parser.add_argument(
-        "--results_dir", type=str, required=True, help="Path to the directory containing result images."
+        "--results_dir",
+        type=str,
+        required=True,
+        help="Path to the directory containing result images.",
     )
-    parser.add_argument("--cache_dir", type=str, required=True, help="Path to the base directory for caching results.")
+    parser.add_argument(
+        "--cache_dir",
+        type=str,
+        required=True,
+        help="Path to the base directory for caching results.",
+    )
     parser.add_argument(
         "--num_images",
         type=int,
@@ -293,7 +322,12 @@ if __name__ == "__main__":
     psnr_cache_dir.mkdir(parents=True, exist_ok=True)
 
     avg_score = calculate_scene_psnr(
-        args.gt_path, args.mask_path, args.results_dir, args.cache_dir, args.num_images, target_size=current_target_size
+        args.gt_path,
+        args.mask_path,
+        args.results_dir,
+        args.cache_dir,
+        args.num_images,
+        target_size=current_target_size,
     )
 
     # Remember: Higher PSNR is better

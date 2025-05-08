@@ -22,7 +22,12 @@ DEFAULT_RANKING_FILENAME = "loftr_ranking_scores.json"  # Filename for rank-only
 class LoFTRMatcher:
     """Handles LoFTR model loading, image comparison, and caching."""
 
-    def __init__(self, model_type=DEFAULT_LOFTR_MODEL, confidence_threshold=DEFAULT_CONFIDENCE_THRESHOLD, device=None):
+    def __init__(
+        self,
+        model_type=DEFAULT_LOFTR_MODEL,
+        confidence_threshold=DEFAULT_CONFIDENCE_THRESHOLD,
+        device=None,
+    ):
         self.config = {"model_type": model_type, "confidence_threshold": confidence_threshold}
         self.device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.model = None
@@ -46,7 +51,9 @@ class LoFTRMatcher:
         """Loads an image path into a Kornia-compatible tensor."""
         try:
             # Load grayscale [0,1] float32 tensor [1, 1, H, W]
-            img_tensor = K.io.load_image(img_path, K.io.ImageLoadType.GRAY32, device=self.device)[None, ...]
+            img_tensor = K.io.load_image(img_path, K.io.ImageLoadType.GRAY32, device=self.device)[
+                None, ...
+            ]
             return img_tensor
         except Exception as e:
             print(f"[LoFTRMatcher] ERROR: Failed to load image {img_path}: {e}")
@@ -63,7 +70,13 @@ class LoFTRMatcher:
             # Sort absolute paths to ensure order doesn't matter
             sorted_paths = tuple(sorted((abs_path1, abs_path2)))
             # Key incorporates files, modification times, and confidence setting
-            key_tuple = (sorted_paths[0], mtime1, sorted_paths[1], mtime2, self.config["confidence_threshold"])
+            key_tuple = (
+                sorted_paths[0],
+                mtime1,
+                sorted_paths[1],
+                mtime2,
+                self.config["confidence_threshold"],
+            )
             return key_tuple
         except FileNotFoundError:
             print(f"Warning: File not found, cannot generate cache key for {path1} or {path2}")
@@ -88,7 +101,9 @@ class LoFTRMatcher:
                     self.cache = valid_cache
                 print(f"[LoFTRMatcher] Loaded {len(self.cache)} valid items.")
             except Exception as e:
-                print(f"[LoFTRMatcher] WARNING: Failed to load or parse disk cache ({e}). Starting fresh.")
+                print(
+                    f"[LoFTRMatcher] WARNING: Failed to load or parse disk cache ({e}). Starting fresh."
+                )
                 self.cache = {}
         else:
             print("[LoFTRMatcher] No disk cache found/specified. Starting fresh.")
@@ -166,7 +181,9 @@ def rank_candidates_by_references(matcher, reference_paths, candidate_paths, cac
 
     matcher.load_disk_cache(cache_file_path)  # Load cache before starting
 
-    print(f"[Ranker] Ranking {len(candidate_paths)} candidates against {len(reference_paths)} references...")
+    print(
+        f"[Ranker] Ranking {len(candidate_paths)} candidates against {len(reference_paths)} references..."
+    )
     candidate_scores = []
     total_comparisons = len(candidate_paths) * len(reference_paths)
     processed_count = 0
@@ -227,11 +244,17 @@ def save_ranking_results(ranking_file_path, ranked_scores, source_dir, ref_dir):
 
 # --- Main CLI Execution Logic ---
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Rank and optionally select/copy candidate images using LoFTR.")
+    parser = argparse.ArgumentParser(
+        description="Rank and optionally select/copy candidate images using LoFTR."
+    )
     # Required Arguments
-    parser.add_argument("--source-dir", required=True, help="Directory containing candidate images (e.g., 0.png).")
     parser.add_argument(
-        "--ref-dir", required=True, help="Directory with reference images (e.g., originals or previously selected)."
+        "--source-dir", required=True, help="Directory containing candidate images (e.g., 0.png)."
+    )
+    parser.add_argument(
+        "--ref-dir",
+        required=True,
+        help="Directory with reference images (e.g., originals or previously selected).",
     )
 
     # Arguments for Copying Mode (ignored if --rank-only)
@@ -255,7 +278,9 @@ if __name__ == "__main__":
         help=f"LoFTR pretrained model type (default: {DEFAULT_LOFTR_MODEL}).",
     )
     parser.add_argument(
-        "--rank-only", action="store_true", help="Only rank candidates and save scores, do not copy files."
+        "--rank-only",
+        action="store_true",
+        help="Only rank candidates and save scores, do not copy files.",
     )
     parser.add_argument(
         "--ranking-output-file",
@@ -290,14 +315,18 @@ if __name__ == "__main__":
 
     # --- Find Existing Refs ---
     # Use absolute paths internally
-    original_ref_paths = sorted([os.path.abspath(p) for p in glob.glob(str(ref_dir_path / "*.png"))])
+    original_ref_paths = sorted(
+        [os.path.abspath(p) for p in glob.glob(str(ref_dir_path / "*.png"))]
+    )
     current_ref_count = len(original_ref_paths)
     print(f"[Main] Found {current_ref_count} existing reference images in '{ref_dir_path}'.")
 
     if not original_ref_paths:
         print("[Main] WARNING: No existing reference images found. Cannot perform LoFTR ranking.")
         # Exit gracefully, but save cache if any comparisons were somehow made (unlikely path)
-        loftr_matcher = LoFTRMatcher(model_type=args.model_type, confidence_threshold=args.conf_threshold)
+        loftr_matcher = LoFTRMatcher(
+            model_type=args.model_type, confidence_threshold=args.conf_threshold
+        )
         cache_file_path = str(source_dir_path / DEFAULT_CACHE_FILENAME)
         loftr_matcher.save_disk_cache(cache_file_path)
         exit(0)
@@ -306,25 +335,35 @@ if __name__ == "__main__":
     candidate_paths = []
     try:
         all_files_in_source = os.listdir(source_dir_path)
-        potential_filenames = [fname for fname in all_files_in_source if re.match(r"^\d+\.png$", fname)]
+        potential_filenames = [
+            fname for fname in all_files_in_source if re.match(r"^\d+\.png$", fname)
+        ]
         potential_filenames.sort(key=lambda fname: int(os.path.splitext(fname)[0]))
         # Store absolute paths for candidates
-        candidate_paths = [os.path.abspath(os.path.join(args.source_dir, fname)) for fname in potential_filenames]
+        candidate_paths = [
+            os.path.abspath(os.path.join(args.source_dir, fname)) for fname in potential_filenames
+        ]
     except Exception as e:
         print(f"[Main] ERROR: Could not list or process candidate files in {args.source_dir}: {e}")
         exit(1)
 
     if not candidate_paths:
-        print(f"[Main] WARNING: No candidate images (e.g., 0.png) found in {args.source_dir}. Nothing to rank.")
+        print(
+            f"[Main] WARNING: No candidate images (e.g., 0.png) found in {args.source_dir}. Nothing to rank."
+        )
         exit(0)
     print(f"[Main] Found {len(candidate_paths)} potential candidates.")
 
     # --- Initialize Matcher ---
-    loftr_matcher = LoFTRMatcher(model_type=args.model_type, confidence_threshold=args.conf_threshold)
+    loftr_matcher = LoFTRMatcher(
+        model_type=args.model_type, confidence_threshold=args.conf_threshold
+    )
     cache_file_path = str(source_dir_path / DEFAULT_CACHE_FILENAME)  # Cache file in source dir
 
     # --- Rank Candidates ---
-    ranked_scores = rank_candidates_by_references(loftr_matcher, original_ref_paths, candidate_paths, cache_file_path)
+    ranked_scores = rank_candidates_by_references(
+        loftr_matcher, original_ref_paths, candidate_paths, cache_file_path
+    )
 
     if not ranked_scores:
         print("[Main] LoFTR ranking returned no results (perhaps all comparisons failed?).")
@@ -332,7 +371,9 @@ if __name__ == "__main__":
         loftr_matcher.save_disk_cache(cache_file_path)
         exit(1)  # Exit with error if ranking failed to produce scores
 
-    print(f"\n[Main] LoFTR Ranking results (Top {min(5, len(ranked_scores))} / {len(ranked_scores)} total):")
+    print(
+        f"\n[Main] LoFTR Ranking results (Top {min(5, len(ranked_scores))} / {len(ranked_scores)} total):"
+    )
     for i, (score, path) in enumerate(ranked_scores[:5]):
         print(f"  Rank {i+1}: Score={score}, File={os.path.basename(path)}")
 
@@ -354,7 +395,9 @@ if __name__ == "__main__":
 
         # Select Top N
         num_to_select = min(num_needed, len(ranked_scores))
-        selected_candidate_paths = [path for score, path in ranked_scores[:num_to_select]]  # Paths are already absolute
+        selected_candidate_paths = [
+            path for score, path in ranked_scores[:num_to_select]
+        ]  # Paths are already absolute
 
         if num_to_select <= 0:
             print("[Main] No candidates available to select, though some were needed.")
@@ -397,7 +440,9 @@ if __name__ == "__main__":
 
         print(f"\n[Main] Finished copying. Added {copied_count} new images.")
         final_ref_images = glob.glob(str(ref_dir_path / "*.png"))
-        print(f"[Main] Reference directory '{ref_dir_path}' now contains {len(final_ref_images)} PNG images.")
+        print(
+            f"[Main] Reference directory '{ref_dir_path}' now contains {len(final_ref_images)} PNG images."
+        )
 
     print("-" * 30)
     print("[Main] LoFTR script finished.")

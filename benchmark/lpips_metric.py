@@ -10,11 +10,12 @@ import os
 from pathlib import Path
 from tqdm import tqdm
 import time
-import traceback # Added for better error logging
+import traceback  # Added for better error logging
 
 # Attempt LPIPS import
 try:
     import lpips
+
     lpips_available = True
 except ImportError:
     print("Error: lpips library not found. Please install it: pip install lpips")
@@ -31,11 +32,12 @@ LPIPS_NET = "alex"  # Or 'vgg'
 # --- Model Variables (Initialize to None) ---
 loss_fn_lpips = None
 device = None
-model_loaded = False # Flag to track loading state
+model_loaded = False  # Flag to track loading state
 
 # --- Transforms (Define globally) ---
 # Converts numpy HWC [0,255] to torch CHW [0,1]
 img_to_tensor = transforms.ToTensor()
+
 
 def normalize_tensor(tensor):
     """Normalizes a tensor from [0,1] to [-1,1] as expected by LPIPS."""
@@ -44,18 +46,19 @@ def normalize_tensor(tensor):
 
 # --- Helper Functions ---
 
+
 def _load_model_if_needed():
     """Loads the LPIPS model once, only when needed."""
     global loss_fn_lpips, device, model_loaded, lpips_available
     if model_loaded:
-        return True # Already loaded successfully
+        return True  # Already loaded successfully
 
     if not lpips_available:
         print("LPIPS library not available, cannot load model.")
         return False
 
     if loss_fn_lpips is not None and device is not None:
-        model_loaded = True # Already loaded
+        model_loaded = True  # Already loaded
         return True
 
     print(f"Attempting to load LPIPS model (net={LPIPS_NET})...")
@@ -102,7 +105,10 @@ def calculate_lpips_masked(gt_tensor_norm, gen_tensor_norm, mask_tensor, model, 
         print("LPIPS model or device not available during distance calculation.")
         return None
 
-    if gt_tensor_norm.shape != gen_tensor_norm.shape or gt_tensor_norm.shape[2:] != mask_tensor.shape[2:]:
+    if (
+        gt_tensor_norm.shape != gen_tensor_norm.shape
+        or gt_tensor_norm.shape[2:] != mask_tensor.shape[2:]
+    ):
         print("Warning: Tensor shape mismatch. Skipping LPIPS calculation.")
         return None
 
@@ -121,7 +127,9 @@ def calculate_lpips_masked(gt_tensor_norm, gen_tensor_norm, mask_tensor, model, 
 
 def get_cache_path(cache_dir, results_dir_name):
     """Constructs the path for the cache file."""
-    return Path(cache_dir) / "per_scene_cache" / "lpips_masked" / f"{results_dir_name}.json"  # Use _masked suffix
+    return (
+        Path(cache_dir) / "per_scene_cache" / "lpips_masked" / f"{results_dir_name}.json"
+    )  # Use _masked suffix
 
 
 def load_cache(cache_file, gt_mtime_current, mask_mtime_current):
@@ -178,7 +186,12 @@ def save_cache(cache_file, data, gt_mtime, mask_mtime):
 
 # --- Main Function ---
 def calculate_scene_lpips(
-    gt_path_str, mask_path_str, results_dir_str, cache_dir_str, num_images=DEFAULT_NUM_IMAGES, target_size=TARGET_SIZE
+    gt_path_str,
+    mask_path_str,
+    results_dir_str,
+    cache_dir_str,
+    num_images=DEFAULT_NUM_IMAGES,
+    target_size=TARGET_SIZE,
 ):
     """
     Calculates the average masked LPIPS distance for a given scene.
@@ -218,7 +231,9 @@ def calculate_scene_lpips(
 
         if target_size:
             gt_image_rgb = cv2.resize(gt_image_rgb, target_size, interpolation=cv2.INTER_LINEAR)
-            mask_image_gray = cv2.resize(mask_image_gray, target_size, interpolation=cv2.INTER_NEAREST)
+            mask_image_gray = cv2.resize(
+                mask_image_gray, target_size, interpolation=cv2.INTER_NEAREST
+            )
 
         # Tensors are needed for calculation, but can be created later if needed
         # We only need paths and mtimes for cache check initially
@@ -246,17 +261,20 @@ def calculate_scene_lpips(
         gt_tensor = img_to_tensor(gt_image_rgb)  # [C, H, W], [0, 1]
         # Ensure device is valid before using .to(device)
         if device is None:
-             print("Error: LPIPS device is None after model loading attempt.")
-             return None
-        gt_tensor_norm = normalize_tensor(gt_tensor).unsqueeze(0).to(device)  # [1, C, H, W], [-1, 1]
+            print("Error: LPIPS device is None after model loading attempt.")
+            return None
+        gt_tensor_norm = (
+            normalize_tensor(gt_tensor).unsqueeze(0).to(device)
+        )  # [1, C, H, W], [-1, 1]
 
         # Convert mask to tensor [1, 1, H, W], [0, 1]
-        mask_tensor = img_to_tensor(mask_image_gray.astype(np.float32) / 255.0).unsqueeze(0).to(device)
+        mask_tensor = (
+            img_to_tensor(mask_image_gray.astype(np.float32) / 255.0).unsqueeze(0).to(device)
+        )
         mask_tensor = (mask_tensor > 0.5).float()
     except Exception as e:
         print(f"Error creating tensors from GT/Mask: {e}")
         return None
-
 
     # --- Calculation ---
     print(f"Calculating Masked LPIPS for scene: {results_dir_name}")
@@ -264,13 +282,15 @@ def calculate_scene_lpips(
     valid_image_count = 0
     per_image_scores = {}
 
-    image_files = sorted([p for p in results_dir.glob("*.png") if p.stem.isdigit()], key=lambda x: int(x.stem))
+    image_files = sorted(
+        [p for p in results_dir.glob("*.png") if p.stem.isdigit()], key=lambda x: int(x.stem)
+    )
     image_files = image_files[:num_images]
 
     if not image_files:
         print(f"Warning: No valid result images (0..{num_images-1}.png) found in {results_dir}")
         save_cache(cache_file, {"average": None, "per_image": {}, "count": 0}, gt_mtime, mask_mtime)
-        return None # Return None as 0.0 is a valid LPIPS score
+        return None  # Return None as 0.0 is a valid LPIPS score
 
     # Pass loaded model and device to helper
     for i in tqdm(range(num_images), desc=f"LPIPS Processing {results_dir_name}", leave=False):
@@ -289,7 +309,9 @@ def calculate_scene_lpips(
 
                 if target_size:
                     if gen_image_rgb.shape[:2] != target_size[::-1]:
-                        gen_image_rgb = cv2.resize(gen_image_rgb, target_size, interpolation=cv2.INTER_LINEAR)
+                        gen_image_rgb = cv2.resize(
+                            gen_image_rgb, target_size, interpolation=cv2.INTER_LINEAR
+                        )
 
                 gen_tensor = img_to_tensor(gen_image_rgb)
                 gen_tensor_norm = normalize_tensor(gen_tensor).unsqueeze(0).to(device)
@@ -314,13 +336,22 @@ def calculate_scene_lpips(
 
     if valid_image_count == 0:
         print(f"Error: No valid result images processed for Masked LPIPS in {results_dir}")
-        save_cache(cache_file, {"average": None, "per_image": per_image_scores, "count": 0}, gt_mtime, mask_mtime)
+        save_cache(
+            cache_file,
+            {"average": None, "per_image": per_image_scores, "count": 0},
+            gt_mtime,
+            mask_mtime,
+        )
         return None
 
     average_lpips = total_lpips / valid_image_count
 
     # --- Save to Cache ---
-    cache_data = {"average": average_lpips, "per_image": per_image_scores, "count": valid_image_count}
+    cache_data = {
+        "average": average_lpips,
+        "per_image": per_image_scores,
+        "count": valid_image_count,
+    }
     save_cache(cache_file, cache_data, gt_mtime, mask_mtime)
 
     return average_lpips
@@ -328,13 +359,25 @@ def calculate_scene_lpips(
 
 # --- Command Line Interface ---
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Calculate Masked LPIPS distance for a RealFill result scene.")
-    parser.add_argument("--gt_path", type=str, required=True, help="Path to the ground truth image.")
+    parser = argparse.ArgumentParser(
+        description="Calculate Masked LPIPS distance for a RealFill result scene."
+    )
+    parser.add_argument(
+        "--gt_path", type=str, required=True, help="Path to the ground truth image."
+    )
     parser.add_argument("--mask_path", type=str, required=True, help="Path to the mask image.")
     parser.add_argument(
-        "--results_dir", type=str, required=True, help="Path to the directory containing result images."
+        "--results_dir",
+        type=str,
+        required=True,
+        help="Path to the directory containing result images.",
     )
-    parser.add_argument("--cache_dir", type=str, required=True, help="Path to the base directory for caching results.")
+    parser.add_argument(
+        "--cache_dir",
+        type=str,
+        required=True,
+        help="Path to the base directory for caching results.",
+    )
     parser.add_argument(
         "--num_images",
         type=int,
@@ -357,12 +400,19 @@ if __name__ == "__main__":
 
     # calculate_scene_lpips handles model loading internally
     avg_score = calculate_scene_lpips(
-        args.gt_path, args.mask_path, args.results_dir, args.cache_dir, args.num_images, target_size=current_target_size
+        args.gt_path,
+        args.mask_path,
+        args.results_dir,
+        args.cache_dir,
+        args.num_images,
+        target_size=current_target_size,
     )
 
     # Remember: Lower LPIPS is better
     if avg_score is not None:
-        print(f"\nAverage Masked LPIPS ({LPIPS_NET}) for {Path(args.results_dir).name}: {avg_score:.4f}")
+        print(
+            f"\nAverage Masked LPIPS ({LPIPS_NET}) for {Path(args.results_dir).name}: {avg_score:.4f}"
+        )
         print(f"FINAL_SCORE:{avg_score:.8f}")
     else:
         print(f"\nFailed to calculate Masked LPIPS for {Path(args.results_dir).name}")

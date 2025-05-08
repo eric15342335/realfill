@@ -18,7 +18,14 @@ import traceback
 
 # Rich library imports for enhanced terminal UI
 from rich.live import Live
-from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, TimeElapsedColumn, TimeRemainingColumn
+from rich.progress import (
+    Progress,
+    SpinnerColumn,
+    BarColumn,
+    TextColumn,
+    TimeElapsedColumn,
+    TimeRemainingColumn,
+)
 from rich.console import Console, Group
 
 # --- Configuration & Constants ---
@@ -40,7 +47,9 @@ LOFTR_RANKING_FILENAME = "loftr_ranking_scores.json"
 
 
 # --- Helper Functions ---
-def find_gt_mask_paths(results_dir_path: Path, dataset_dirs_map: dict) -> tuple[str | None, str | None]:
+def find_gt_mask_paths(
+    results_dir_path: Path, dataset_dirs_map: dict
+) -> tuple[str | None, str | None]:
     """Finds Ground Truth (GT) and Mask paths based on a results folder name."""
     dir_name = results_dir_path.name
     # Regex to match folder names like "RealBench-0-results" or "Custom-123"
@@ -53,7 +62,9 @@ def find_gt_mask_paths(results_dir_path: Path, dataset_dirs_map: dict) -> tuple[
 
     if not dataset_base_dir or not Path(dataset_base_dir).is_dir():
         # This print is okay, as it happens before any Rich Live display usually
-        print(f"Warning: Dataset base directory for '{benchmark_type}' not found or invalid: {dataset_base_dir}")
+        print(
+            f"Warning: Dataset base directory for '{benchmark_type}' not found or invalid: {dataset_base_dir}"
+        )
         return None, None
 
     # Construct path based on expected structure: dataset_base_dir / BenchmarkType / SceneNumber / target / gt.png (or mask.png)
@@ -159,7 +170,9 @@ def convert_numpy_types(obj):
         ),
     ):  # More comprehensive integer check
         return int(obj)
-    elif isinstance(obj, (np.floating, np.float16, np.float32, np.float64)):  # More comprehensive float check
+    elif isinstance(
+        obj, (np.floating, np.float16, np.float32, np.float64)
+    ):  # More comprehensive float check
         if np.isnan(obj):
             return None  # Represent NaN as null in JSON, as JSON standard does not support NaN
         elif np.isinf(obj):
@@ -211,7 +224,9 @@ def run_metric_script_parallel(
     worker_log_func = tqdm.write if sys.stdout.isatty() else print
 
     if not absolute_script_path.is_file():
-        worker_log_func(f"WORKER_ERROR ({metric_name} on {folder_name}): Script not found at {absolute_script_path}")
+        worker_log_func(
+            f"WORKER_ERROR ({metric_name} on {folder_name}): Script not found at {absolute_script_path}"
+        )
         return metric_name, None, folder_name
 
     command = [
@@ -270,7 +285,9 @@ def run_metric_script_parallel(
         return metric_name, score, folder_name
 
     except subprocess.TimeoutExpired:
-        worker_log_func(f"\nWORKER_ERROR ({metric_name} on {folder_name}): Timeout expired for metric script.\n")
+        worker_log_func(
+            f"\nWORKER_ERROR ({metric_name} on {folder_name}): Timeout expired for metric script.\n"
+        )
         return metric_name, None, folder_name
     except Exception as e:
         # Catch any other unexpected errors during subprocess execution
@@ -301,7 +318,10 @@ def execute_metric_tasks_for_worker(
 
         try:
             # Prepend metric_name and script_filename to the task_details_tuple
-            full_args_for_metric_script = (metric_name_arg, script_filename_arg) + task_details_tuple
+            full_args_for_metric_script = (
+                metric_name_arg,
+                script_filename_arg,
+            ) + task_details_tuple
 
             metric_name_result, score_result, folder_name_result = run_metric_script_parallel(
                 *full_args_for_metric_script
@@ -321,7 +341,9 @@ def execute_metric_tasks_for_worker(
             )
             traceback.print_exc(file=sys.stderr)
             # Send an error result for this task
-            results_queue.put(("RESULT", metric_name_arg, None, current_folder_name_for_error_context))
+            results_queue.put(
+                ("RESULT", metric_name_arg, None, current_folder_name_for_error_context)
+            )
 
         # Send a progress update message after each task is attempted (successfully or not)
         # The main process will use this to advance the Rich progress bar for this specific metric.
@@ -332,7 +354,9 @@ class BenchmarkRunner:
     def __init__(self, cli_args: argparse.Namespace):
         self.args = cli_args
         self.base_results_dir = Path(cli_args.results_base_dir).resolve()
-        self.dataset_dirs_map = {}  # Stores mapping like {"RealBench": Path(...), "Custom": Path(...)}
+        self.dataset_dirs_map = (
+            {}
+        )  # Stores mapping like {"RealBench": Path(...), "Custom": Path(...)}
 
         # Validate and store dataset paths from arguments
         if cli_args.realbench_dataset_dir:
@@ -355,11 +379,15 @@ class BenchmarkRunner:
             )
 
         self.cache_dir = Path(cli_args.cache_dir).resolve()
-        self.output_file_path = Path(cli_args.output_file).resolve() if cli_args.output_file else None
+        self.output_file_path = (
+            Path(cli_args.output_file).resolve() if cli_args.output_file else None
+        )
         self.num_images_per_scene = cli_args.num_images
 
         # Normalize force_recalc list to lowercase for case-insensitive matching
-        self.force_recalc_metrics_list = [metric.lower() for metric in (cli_args.force_recalc or [])]
+        self.force_recalc_metrics_list = [
+            metric.lower() for metric in (cli_args.force_recalc or [])
+        ]
 
         # Determine metrics to run: from args or all from METRICS_CONFIG
         if cli_args.metrics:
@@ -389,8 +417,12 @@ class BenchmarkRunner:
 
         self.discovered_result_folders = []  # List of Path objects for valid result folders
         self.master_results_data = defaultdict(dict)  # Stores {folder_name: {metric: score}}
-        self.per_image_scores_cache = defaultdict(lambda: defaultdict(dict))  # In-memory cache for per-image scores
-        self.loftr_ranking_data = defaultdict(list)  # Stores {folder_name: [ranked_image_filenames]}
+        self.per_image_scores_cache = defaultdict(
+            lambda: defaultdict(dict)
+        )  # In-memory cache for per-image scores
+        self.loftr_ranking_data = defaultdict(
+            list
+        )  # Stores {folder_name: [ranked_image_filenames]}
 
         # Initial console output (before Rich Live typically starts)
         print("Benchmark Runner Initialized:")
@@ -429,8 +461,12 @@ class BenchmarkRunner:
         # Disabling bar if not TTY for cleaner logs
         folder_iterator = sorted(self.base_results_dir.iterdir())  # Sort for predictable order
         pbar_disabled = not sys.stdout.isatty()
-        for item_path in tqdm(folder_iterator, desc="Scanning Result Folders", unit="folder", disable=pbar_disabled):
-            if item_path.is_dir() and re.match(r"^(RealBench|Custom)-\d+(-results.*)?$", item_path.name):
+        for item_path in tqdm(
+            folder_iterator, desc="Scanning Result Folders", unit="folder", disable=pbar_disabled
+        ):
+            if item_path.is_dir() and re.match(
+                r"^(RealBench|Custom)-\d+(-results.*)?$", item_path.name
+            ):
                 potential_folders_count += 1
                 # Extract benchmark type (RealBench or Custom) to check against dataset_dirs_map
                 type_match = re.match(r"^(RealBench|Custom)", item_path.name)
@@ -455,11 +491,17 @@ class BenchmarkRunner:
 
         # Summary after scan
         print(f"Folder scan complete. Found {potential_folders_count} potential result folders.")
-        print(f"  - Added {len(self.discovered_result_folders)} folders with valid dataset mapping & GT/Mask files.")
+        print(
+            f"  - Added {len(self.discovered_result_folders)} folders with valid dataset mapping & GT/Mask files."
+        )
         if skipped_due_to_mapping > 0:
-            print(f"  - Skipped {skipped_due_to_mapping} folders (dataset type not specified or mapped).")
+            print(
+                f"  - Skipped {skipped_due_to_mapping} folders (dataset type not specified or mapped)."
+            )
         if skipped_due_to_gt_mask > 0:
-            print(f"  - Skipped {skipped_due_to_gt_mask} folders (missing corresponding GT/Mask files).")
+            print(
+                f"  - Skipped {skipped_due_to_gt_mask} folders (missing corresponding GT/Mask files)."
+            )
 
     def load_master_cache(self):
         """Loads the master results cache file from disk."""
@@ -474,7 +516,9 @@ class BenchmarkRunner:
                     self.master_results_data[folder_name] = metrics_dict
                     loaded_entries_count += 1
                 else:
-                    print(f"Warning: Invalid cache entry format for folder '{folder_name}'. Skipping.")
+                    print(
+                        f"Warning: Invalid cache entry format for folder '{folder_name}'. Skipping."
+                    )
             print(f"Loaded {loaded_entries_count} folder entries from master cache.")
         else:
             print("No valid master cache found or cache file is empty/corrupted.")
@@ -515,7 +559,9 @@ class BenchmarkRunner:
         # All prints from this method onwards should ideally use rich_console.print()
         # if they are intended to interact correctly with the Live display.
         rich_console = Console()
-        rich_console.print("\n--- Preparing Metric Tasks for Parallel Execution ---", style="bold cyan")
+        rich_console.print(
+            "\n--- Preparing Metric Tasks for Parallel Execution ---", style="bold cyan"
+        )
         self.load_master_cache()  # This method uses standard print, okay before Live starts
 
         skipped_incomplete_folders = 0
@@ -529,7 +575,9 @@ class BenchmarkRunner:
         # Use valid_metrics_for_run to track metrics that actually have scripts.
         valid_metrics_for_run = set(self.metrics_to_run_list)
 
-        rich_console.print("Checking folder contents and identifying required metric calculations...")
+        rich_console.print(
+            "Checking folder contents and identifying required metric calculations..."
+        )
         benchmark_scripts_dir_base = Path(__file__).parent / "benchmark"
 
         # This initial folder check still uses tqdm because it's a straightforward,
@@ -537,24 +585,33 @@ class BenchmarkRunner:
         # tqdm.write is used for messages within this loop.
         pbar_disabled = not sys.stdout.isatty()
         for folder_path in tqdm(
-            self.discovered_result_folders, desc="Validating Folders & Cache", unit="folder", disable=pbar_disabled
+            self.discovered_result_folders,
+            desc="Validating Folders & Cache",
+            unit="folder",
+            disable=pbar_disabled,
         ):
             folder_name = folder_path.name
             ground_truth_path, mask_path = find_gt_mask_paths(folder_path, self.dataset_dirs_map)
 
             if not ground_truth_path or not mask_path:
                 # This should ideally not happen if discover_folders worked correctly
-                tqdm.write(f"Warning: Skipping '{folder_name}': GT/Mask path became invalid post-discovery.")
+                tqdm.write(
+                    f"Warning: Skipping '{folder_name}': GT/Mask path became invalid post-discovery."
+                )
                 continue
 
             if not self.check_folder_contents(folder_path):
-                actual_image_count = count_result_images(folder_path)  # Recount for accurate message
+                actual_image_count = count_result_images(
+                    folder_path
+                )  # Recount for accurate message
                 tqdm.write(
                     f"Skipping '{folder_name}': Incomplete ({actual_image_count}/{self.num_images_per_scene} images)."
                 )
                 skipped_incomplete_folders += 1
                 if folder_name in self.master_results_data:
-                    tqdm.write(f"  - Removing stale cache entry for incomplete folder '{folder_name}'.")
+                    tqdm.write(
+                        f"  - Removing stale cache entry for incomplete folder '{folder_name}'."
+                    )
                     del self.master_results_data[folder_name]
                 continue
 
@@ -565,7 +622,9 @@ class BenchmarkRunner:
             # Iterate over a copy of valid_metrics_for_run for safe removal during iteration
             for metric_name in list(valid_metrics_for_run):
                 if metric_name not in METRICS_CONFIG:
-                    tqdm.write(f"Warning: Metric '{metric_name}' is not in METRICS_CONFIG. Removing from current run.")
+                    tqdm.write(
+                        f"Warning: Metric '{metric_name}' is not in METRICS_CONFIG. Removing from current run."
+                    )
                     valid_metrics_for_run.discard(metric_name)
                     if metric_name in self.metrics_to_run_list:
                         self.metrics_to_run_list.remove(metric_name)
@@ -578,14 +637,17 @@ class BenchmarkRunner:
                         f"Warning: Script '{absolute_script_path}' missing for metric '{metric_name}'. "
                         f"This metric will be skipped for all folders."
                     )
-                    valid_metrics_for_run.discard(metric_name)  # Remove from consideration for this run
+                    valid_metrics_for_run.discard(
+                        metric_name
+                    )  # Remove from consideration for this run
                     if metric_name in self.metrics_to_run_list:
                         self.metrics_to_run_list.remove(metric_name)
                     continue  # Skip this metric for this folder and subsequent ones
 
                 # Determine if recalculation is needed
                 force_recalculation = (
-                    "all" in self.force_recalc_metrics_list or metric_name.lower() in self.force_recalc_metrics_list
+                    "all" in self.force_recalc_metrics_list
+                    or metric_name.lower() in self.force_recalc_metrics_list
                 )
 
                 score_is_cached_and_valid = (
@@ -613,7 +675,9 @@ class BenchmarkRunner:
             for metric, tasks in tasks_to_run_by_metric.items()
             if tasks and metric in valid_metrics_for_run
         }
-        total_individual_metric_folder_tasks = sum(len(tasks) for tasks in active_tasks_by_metric.values())
+        total_individual_metric_folder_tasks = sum(
+            len(tasks) for tasks in active_tasks_by_metric.values()
+        )
 
         if not total_individual_metric_folder_tasks:
             rich_console.print(
@@ -621,9 +685,13 @@ class BenchmarkRunner:
             )
             self.save_master_cache()  # Save in case stale entries were removed
             rich_console.print("\n--- Metric Execution Phase Skipped ---", style="bold yellow")
-            rich_console.print(f"Folders eligible for processing (complete): {folders_processed_count}")
+            rich_console.print(
+                f"Folders eligible for processing (complete): {folders_processed_count}"
+            )
             if skipped_incomplete_folders > 0:
-                rich_console.print(f"Folders skipped due to incompleteness: {skipped_incomplete_folders}")
+                rich_console.print(
+                    f"Folders skipped due to incompleteness: {skipped_incomplete_folders}"
+                )
             rich_console.print(f"Metric-folder tasks needing calculation: 0")
             return
 
@@ -635,8 +703,12 @@ class BenchmarkRunner:
         )
 
         final_metrics_being_executed = sorted(list(active_tasks_by_metric.keys()))
-        rich_console.print(f"Metrics involved in this run: {', '.join(final_metrics_being_executed)}")
-        rich_console.print(f"Results will be updated/stored for {len(folders_requiring_metric_tasks)} folders.")
+        rich_console.print(
+            f"Metrics involved in this run: {', '.join(final_metrics_being_executed)}"
+        )
+        rich_console.print(
+            f"Results will be updated/stored for {len(folders_requiring_metric_tasks)} folders."
+        )
 
         # --- Multiprocessing and Rich Live Display Setup ---
         # Manager().Queue() is generally more robust for complex objects or across different OS
@@ -694,17 +766,31 @@ class BenchmarkRunner:
         # will print directly to terminal, and Rich Live will redraw around them.
         # Setting them to True can capture worker output but might have performance implications
         # or require careful handling if workers produce a lot of output.
-        with Live(live_display_group, console=rich_console, refresh_per_second=12, vertical_overflow="visible") as live:
+        with Live(
+            live_display_group,
+            console=rich_console,
+            refresh_per_second=12,
+            vertical_overflow="visible",
+        ) as live:
             overall_progress_display.start_task(overall_task_id)  # Start the overall counter
 
             # Launch worker processes
             for metric_name_to_run, tasks_list in active_tasks_by_metric.items():
                 if metric_name_to_run in metric_task_ids_map:  # Ensure task ID exists
-                    metric_specific_progress_display.start_task(metric_task_ids_map[metric_name_to_run])
+                    metric_specific_progress_display.start_task(
+                        metric_task_ids_map[metric_name_to_run]
+                    )
 
                 script_filename_for_metric, _ = METRICS_CONFIG[metric_name_to_run]
-                worker_args = (metric_name_to_run, script_filename_for_metric, tasks_list, results_queue)
-                process = multiprocessing.Process(target=execute_metric_tasks_for_worker, args=worker_args)
+                worker_args = (
+                    metric_name_to_run,
+                    script_filename_for_metric,
+                    tasks_list,
+                    results_queue,
+                )
+                process = multiprocessing.Process(
+                    target=execute_metric_tasks_for_worker, args=worker_args
+                )
                 worker_processes_list.append(process)
                 process.start()
 
@@ -714,7 +800,10 @@ class BenchmarkRunner:
             num_results_collected = 0
             active_workers_exist = True
 
-            while num_results_collected < total_individual_metric_folder_tasks and active_workers_exist:
+            while (
+                num_results_collected < total_individual_metric_folder_tasks
+                and active_workers_exist
+            ):
                 try:
                     # Timeout allows the Live display to refresh and check worker status
                     message_from_worker = results_queue.get(timeout=0.5)  # seconds
@@ -723,7 +812,9 @@ class BenchmarkRunner:
 
                     if msg_type == "PROGRESS_TICK":
                         if metric_name_from_msg in metric_task_ids_map:
-                            metric_specific_progress_display.advance(metric_task_ids_map[metric_name_from_msg], 1)
+                            metric_specific_progress_display.advance(
+                                metric_task_ids_map[metric_name_from_msg], 1
+                            )
                         # Note: Overall progress is advanced when a 'RESULT' is processed.
 
                     elif msg_type == "RESULT":
@@ -738,7 +829,9 @@ class BenchmarkRunner:
 
                             # Store the result if the metric is still considered valid for this run
                             if metric_name_from_msg in valid_metrics_for_run:
-                                self.master_results_data[folder_name_from_msg][metric_name_from_msg] = score_value
+                                self.master_results_data[folder_name_from_msg][
+                                    metric_name_from_msg
+                                ] = score_value
 
                         num_results_collected += 1
                         overall_progress_display.advance(overall_task_id, 1)
@@ -752,7 +845,9 @@ class BenchmarkRunner:
                 except multiprocessing.queues.Empty:
                     pass
                 except Exception as e:  # Handle unexpected errors during queue processing
-                    live.console.print(f"[bold red]Error processing message from worker queue: {e}[/bold red]")
+                    live.console.print(
+                        f"[bold red]Error processing message from worker queue: {e}[/bold red]"
+                    )
                     # Log traceback to stderr to avoid interfering with Rich display too much
                     traceback.print_exc(file=sys.stderr)
 
@@ -767,16 +862,22 @@ class BenchmarkRunner:
                         )
                         # Update overall progress to reflect actual collected items if short
                         if overall_progress_display.tasks[0].completed < num_results_collected:
-                            overall_progress_display.update(overall_task_id, completed=num_results_collected)
+                            overall_progress_display.update(
+                                overall_task_id, completed=num_results_collected
+                            )
                         break  # Exit collection loop
 
             # After collection loop (either completed or broken due to workers finishing early)
             # Ensure overall progress reflects the final count
             overall_progress_display.update(overall_task_id, completed=num_results_collected)
             if num_results_collected < total_individual_metric_folder_tasks:
-                overall_progress_display.update(overall_task_id, description="Calculating all metrics (Run Incomplete)")
+                overall_progress_display.update(
+                    overall_task_id, description="Calculating all metrics (Run Incomplete)"
+                )
             else:
-                overall_progress_display.update(overall_task_id, description="Calculating all metrics (Completed)")
+                overall_progress_display.update(
+                    overall_task_id, description="Calculating all metrics (Completed)"
+                )
 
             live.console.print(
                 "[green]Result collection phase complete. Waiting for worker processes to join...[/green]"
@@ -805,14 +906,20 @@ class BenchmarkRunner:
         # --- End of Rich Live context ---
 
         # Final messages after Rich Live context has ended
-        rich_console.print("[bold green]All dedicated metric worker processes have completed processing.[/bold green]")
+        rich_console.print(
+            "[bold green]All dedicated metric worker processes have completed processing.[/bold green]"
+        )
         self.save_master_cache()  # Save all collected results (including None for errors)
 
         rich_console.print("\n--- Metric Execution Summary ---", style="bold cyan")
         rich_console.print(f"Folders eligible for processing (complete): {folders_processed_count}")
         if skipped_incomplete_folders > 0:
-            rich_console.print(f"Folders skipped due to incompleteness: {skipped_incomplete_folders}")
-        rich_console.print(f"Folders requiring metric calculations this run: {len(folders_requiring_metric_tasks)}")
+            rich_console.print(
+                f"Folders skipped due to incompleteness: {skipped_incomplete_folders}"
+            )
+        rich_console.print(
+            f"Folders requiring metric calculations this run: {len(folders_requiring_metric_tasks)}"
+        )
         rich_console.print(
             f"Total individual metric-folder tasks processed: {num_results_collected} "
             f"(out of {total_individual_metric_folder_tasks} identified)."
@@ -824,7 +931,10 @@ class BenchmarkRunner:
         Caches results in self.per_image_scores_cache to avoid redundant file I/O.
         """
         # Check in-memory cache first
-        if folder_name in self.per_image_scores_cache and metric_name in self.per_image_scores_cache[folder_name]:
+        if (
+            folder_name in self.per_image_scores_cache
+            and metric_name in self.per_image_scores_cache[folder_name]
+        ):
             return self.per_image_scores_cache[folder_name][metric_name]
 
         # Determine subdirectory for per-image cache based on metric type (masked or not)
@@ -832,10 +942,17 @@ class BenchmarkRunner:
         is_masked_metric = metric_name in ["PSNR", "SSIM", "LPIPS"]  # Example masked metrics
         cache_subdir_name = metric_name.lower() + ("_masked" if is_masked_metric else "")
 
-        per_image_cache_file = self.per_image_cache_root_dir / cache_subdir_name / f"{folder_name}.json"
+        per_image_cache_file = (
+            self.per_image_cache_root_dir / cache_subdir_name / f"{folder_name}.json"
+        )
 
         data = load_json_cache(per_image_cache_file)  # Uses standard print for errors
-        if data and isinstance(data, dict) and "per_image" in data and isinstance(data["per_image"], dict):
+        if (
+            data
+            and isinstance(data, dict)
+            and "per_image" in data
+            and isinstance(data["per_image"], dict)
+        ):
             # Store in in-memory cache for future calls
             self.per_image_scores_cache[folder_name][metric_name] = data["per_image"]
             return data["per_image"]
@@ -875,13 +992,19 @@ class BenchmarkRunner:
         num_skipped_missing_ref = 0
         num_errors = 0
 
-        force_loftr_recalc = "all" in self.force_recalc_metrics_list or "loftr" in self.force_recalc_metrics_list
+        force_loftr_recalc = (
+            "all" in self.force_recalc_metrics_list or "loftr" in self.force_recalc_metrics_list
+        )
 
         print("Executing LoFTR ranking script for each suitable folder (this may take time)...")
         # tqdm for LoFTR processing loop
         pbar_disabled = not sys.stdout.isatty()
         for folder_path_for_loftr in tqdm(
-            folders_for_loftr_ranking, desc="LoFTR Ranking", unit="folder", leave=False, disable=pbar_disabled
+            folders_for_loftr_ranking,
+            desc="LoFTR Ranking",
+            unit="folder",
+            leave=False,
+            disable=pbar_disabled,
         ):
             output_json_path = folder_path_for_loftr / LOFTR_RANKING_FILENAME
 
@@ -891,7 +1014,9 @@ class BenchmarkRunner:
 
             gt_path_str, _ = find_gt_mask_paths(folder_path_for_loftr, self.dataset_dirs_map)
             if not gt_path_str:
-                tqdm.write(f"Warning: No Ground Truth path found for '{folder_path_for_loftr.name}', skipping LoFTR.")
+                tqdm.write(
+                    f"Warning: No Ground Truth path found for '{folder_path_for_loftr.name}', skipping LoFTR."
+                )
                 num_skipped_missing_ref += 1
                 continue
 
@@ -905,7 +1030,9 @@ class BenchmarkRunner:
                 num_skipped_missing_ref += 1
                 continue
 
-            if force_loftr_recalc and output_json_path.is_file():  # If forcing, message that it's re-running
+            if (
+                force_loftr_recalc and output_json_path.is_file()
+            ):  # If forcing, message that it's re-running
                 tqdm.write(f"Forcing LoFTR re-ranking for {folder_path_for_loftr.name}...")
 
             command_to_run_loftr = [
@@ -947,7 +1074,9 @@ class BenchmarkRunner:
                         )
                         num_errors += 1
             except subprocess.TimeoutExpired:
-                tqdm.write(f"\nERROR: Timeout expired during LoFTR ranking for '{folder_path_for_loftr.name}'.\n")
+                tqdm.write(
+                    f"\nERROR: Timeout expired during LoFTR ranking for '{folder_path_for_loftr.name}'.\n"
+                )
                 num_errors += 1
             except Exception as e:
                 tqdm.write(
@@ -960,11 +1089,17 @@ class BenchmarkRunner:
         if num_ranked_successfully > 0:
             print(f"Successfully ran/updated LoFTR ranks for {num_ranked_successfully} folders.")
         if num_skipped_existing > 0:
-            print(f"Skipped {num_skipped_existing} folders (LoFTR ranks already existed and no force recalc).")
+            print(
+                f"Skipped {num_skipped_existing} folders (LoFTR ranks already existed and no force recalc)."
+            )
         if num_skipped_missing_ref > 0:
-            print(f"Skipped {num_skipped_missing_ref} folders (missing reference directory or GT path).")
+            print(
+                f"Skipped {num_skipped_missing_ref} folders (missing reference directory or GT path)."
+            )
         if num_errors > 0:
-            print(f"Encountered errors during LoFTR ranking for {num_errors} folders. Check logs above.")
+            print(
+                f"Encountered errors during LoFTR ranking for {num_errors} folders. Check logs above."
+            )
 
     def load_loftr_ranks(self):
         """Loads LoFTR ranking results from JSON files into self.loftr_ranking_data."""
@@ -1008,16 +1143,22 @@ class BenchmarkRunner:
                 ranked_filenames = [
                     item["filename"]
                     for item in rank_data_json["ranking"]
-                    if isinstance(item, dict) and "filename" in item and isinstance(item["filename"], str)
+                    if isinstance(item, dict)
+                    and "filename" in item
+                    and isinstance(item["filename"], str)
                 ]
 
                 # Further validate filenames (e.g., "0.png", "1.png")
-                if ranked_filenames and all(re.match(r"^\d+\.png$", fname) for fname in ranked_filenames):
+                if ranked_filenames and all(
+                    re.match(r"^\d+\.png$", fname) for fname in ranked_filenames
+                ):
                     self.loftr_ranking_data[folder_path.name] = ranked_filenames
                     num_ranks_loaded += 1
                 else:
                     if ranked_filenames:  # Only warn if list was populated but filenames were bad
-                        print(f"Warning: Invalid filenames found in LoFTR rank file: {rank_file_path}")
+                        print(
+                            f"Warning: Invalid filenames found in LoFTR rank file: {rank_file_path}"
+                        )
                     num_missing_or_invalid += 1
             else:
                 # print(f"Debug: LoFTR rank file missing or invalid for {folder_path.name} at {rank_file_path}")
@@ -1028,7 +1169,9 @@ class BenchmarkRunner:
             print(f"Successfully loaded LoFTR ranks for {num_ranks_loaded} folders.")
         if num_missing_or_invalid > 0:
             # This count includes files not found and files with invalid format.
-            print(f"LoFTR ranks were missing or in an invalid format for {num_missing_or_invalid} folders.")
+            print(
+                f"LoFTR ranks were missing or in an invalid format for {num_missing_or_invalid} folders."
+            )
 
     def analyze_results(self) -> dict:
         """Performs comparative analysis on the collected master results."""
@@ -1047,22 +1190,32 @@ class BenchmarkRunner:
         realbench_fp16_nongen_folders = [
             name
             for name in valid_folder_names_with_results
-            if name.startswith("RealBench") and "fp32" not in name.lower() and "gen" not in name.lower()
+            if name.startswith("RealBench")
+            and "fp32" not in name.lower()
+            and "gen" not in name.lower()
         ]
         custom_fp16_nongen_folders = [
             name
             for name in valid_folder_names_with_results
-            if name.startswith("Custom") and "fp32" not in name.lower() and "gen" not in name.lower()
+            if name.startswith("Custom")
+            and "fp32" not in name.lower()
+            and "gen" not in name.lower()
         ]
 
         # --- Overall Averages ---
-        analysis_summary["overall_realbench_fp16_nongen"] = self._calculate_average(realbench_fp16_nongen_folders)
-        analysis_summary["overall_custom_fp16_nongen"] = self._calculate_average(custom_fp16_nongen_folders)
+        analysis_summary["overall_realbench_fp16_nongen"] = self._calculate_average(
+            realbench_fp16_nongen_folders
+        )
+        analysis_summary["overall_custom_fp16_nongen"] = self._calculate_average(
+            custom_fp16_nongen_folders
+        )
 
         # --- FP16 vs FP32 Comparisons (RealBench) ---
         # Map scene keys to full folder names for fp16 and fp32 variants
         fp16_realbench_map = {
-            get_scene_key(name): name for name in realbench_fp16_nongen_folders if get_scene_key(name)
+            get_scene_key(name): name
+            for name in realbench_fp16_nongen_folders
+            if get_scene_key(name)
         }
         fp32_realbench_map = {
             get_scene_key(name): name
@@ -1072,12 +1225,18 @@ class BenchmarkRunner:
             and "gen" not in name.lower()
             and get_scene_key(name)
         }
-        common_realbench_fp_scenes = sorted([key for key in fp16_realbench_map if key in fp32_realbench_map])
+        common_realbench_fp_scenes = sorted(
+            [key for key in fp16_realbench_map if key in fp32_realbench_map]
+        )
         if common_realbench_fp_scenes:
             analysis_summary["fp16_vs_fp32_realbench"] = {
                 "common_scenes": common_realbench_fp_scenes,
-                "fp16_avg": self._calculate_average([fp16_realbench_map[key] for key in common_realbench_fp_scenes]),
-                "fp32_avg": self._calculate_average([fp32_realbench_map[key] for key in common_realbench_fp_scenes]),
+                "fp16_avg": self._calculate_average(
+                    [fp16_realbench_map[key] for key in common_realbench_fp_scenes]
+                ),
+                "fp32_avg": self._calculate_average(
+                    [fp32_realbench_map[key] for key in common_realbench_fp_scenes]
+                ),
             }
         else:
             analysis_summary["fp16_vs_fp32_realbench"] = (
@@ -1085,7 +1244,9 @@ class BenchmarkRunner:
             )
 
         # --- FP16 vs FP32 Comparisons (Custom) ---
-        fp16_custom_map = {get_scene_key(name): name for name in custom_fp16_nongen_folders if get_scene_key(name)}
+        fp16_custom_map = {
+            get_scene_key(name): name for name in custom_fp16_nongen_folders if get_scene_key(name)
+        }
         fp32_custom_map = {
             get_scene_key(name): name
             for name in valid_folder_names_with_results
@@ -1098,8 +1259,12 @@ class BenchmarkRunner:
         if common_custom_fp_scenes:
             analysis_summary["fp16_vs_fp32_custom"] = {
                 "common_scenes": common_custom_fp_scenes,
-                "fp16_avg": self._calculate_average([fp16_custom_map[key] for key in common_custom_fp_scenes]),
-                "fp32_avg": self._calculate_average([fp32_custom_map[key] for key in common_custom_fp_scenes]),
+                "fp16_avg": self._calculate_average(
+                    [fp16_custom_map[key] for key in common_custom_fp_scenes]
+                ),
+                "fp32_avg": self._calculate_average(
+                    [fp32_custom_map[key] for key in common_custom_fp_scenes]
+                ),
             }
         else:
             analysis_summary["fp16_vs_fp32_custom"] = (
@@ -1115,11 +1280,15 @@ class BenchmarkRunner:
             and "fp32" not in name.lower()
             and get_scene_key(name)
         }
-        common_realbench_gen_scenes = sorted([key for key in fp16_realbench_map if key in generated_realbench_fp16_map])
+        common_realbench_gen_scenes = sorted(
+            [key for key in fp16_realbench_map if key in generated_realbench_fp16_map]
+        )
         if common_realbench_gen_scenes:
             analysis_summary["gen_vs_nongen_realbench_fp16"] = {
                 "common_scenes": common_realbench_gen_scenes,
-                "nongen_avg": self._calculate_average([fp16_realbench_map[key] for key in common_realbench_gen_scenes]),
+                "nongen_avg": self._calculate_average(
+                    [fp16_realbench_map[key] for key in common_realbench_gen_scenes]
+                ),
                 "gen_avg": self._calculate_average(
                     [generated_realbench_fp16_map[key] for key in common_realbench_gen_scenes]
                 ),
@@ -1137,14 +1306,18 @@ class BenchmarkRunner:
             print("LoFTR Filtering analysis skipped: LoFTR script was not available.")
             analysis_summary["loftr_filtering"] = "Skipped (LoFTR script unavailable)"
 
-        if self.loftr_script_path:  # Double-check, as load_loftr_ranks might also set it to unavailable
+        if (
+            self.loftr_script_path
+        ):  # Double-check, as load_loftr_ranks might also set it to unavailable
             loftr_filtered_results = defaultdict(lambda: defaultdict(dict))
             # Base folders for LoFTR analysis: RealBench FP16 Non-Gen that are complete
             # Use the list of folder names directly
             base_folders_for_loftr_analysis = [
                 name
                 for name in realbench_fp16_nongen_folders
-                if self.check_folder_contents(self.base_results_dir / name)  # Ensure folder is complete
+                if self.check_folder_contents(
+                    self.base_results_dir / name
+                )  # Ensure folder is complete
             ]
 
             if not base_folders_for_loftr_analysis:
@@ -1152,16 +1325,24 @@ class BenchmarkRunner:
                     "Skipped (No complete base RealBench FP16 non-gen results for LoFTR filtering)"
                 )
             elif not self.loftr_ranking_data:  # Check if any ranks were actually loaded
-                analysis_summary["loftr_filtering"] = "Skipped (No LoFTR ranking data loaded for analysis)"
+                analysis_summary["loftr_filtering"] = (
+                    "Skipped (No LoFTR ranking data loaded for analysis)"
+                )
             else:
                 print(
                     f"Performing LoFTR filtering analysis on {len(base_folders_for_loftr_analysis)} RealBench FP16 non-gen scenes..."
                 )
-                notes_on_missing_data = set()  # To collect notes about missing per-image scores or ranks
+                notes_on_missing_data = (
+                    set()
+                )  # To collect notes about missing per-image scores or ranks
 
                 for filter_rate in LOFTR_FILTER_RATES:
-                    num_images_to_keep = max(1, int(round(self.num_images_per_scene * (1.0 - filter_rate))))
-                    rate_description_key = f"{int(filter_rate*100)}% Filtered (Top {num_images_to_keep} images)"
+                    num_images_to_keep = max(
+                        1, int(round(self.num_images_per_scene * (1.0 - filter_rate)))
+                    )
+                    rate_description_key = (
+                        f"{int(filter_rate*100)}% Filtered (Top {num_images_to_keep} images)"
+                    )
 
                     # Iterate through metrics that were specified for the run
                     for metric_name_for_loftr in self.metrics_to_run_list:
@@ -1179,12 +1360,16 @@ class BenchmarkRunner:
                                 )
                                 continue
                             if ranked_image_filenames is None:
-                                notes_on_missing_data.add(f"{folder_name_str} (LoFTR rank data missing)")
+                                notes_on_missing_data.add(
+                                    f"{folder_name_str} (LoFTR rank data missing)"
+                                )
                                 continue
 
                             # Get scores for the top N ranked images, ensuring they exist and are valid
                             valid_scores_from_top_ranked = []
-                            for img_filename in ranked_image_filenames[:num_images_to_keep]:  # Slice to top N
+                            for img_filename in ranked_image_filenames[
+                                :num_images_to_keep
+                            ]:  # Slice to top N
                                 if img_filename in per_image_scores_for_folder:
                                     score_val = per_image_scores_for_folder[img_filename]
                                     if (
@@ -1200,12 +1385,14 @@ class BenchmarkRunner:
                                 # else: ranked image filename not found in scores dict, skip it
 
                             if valid_scores_from_top_ranked:
-                                scores_for_current_metric_at_rate.append(np.mean(valid_scores_from_top_ranked))
+                                scores_for_current_metric_at_rate.append(
+                                    np.mean(valid_scores_from_top_ranked)
+                                )
                                 num_scenes_contributing += 1
 
                         if scores_for_current_metric_at_rate:  # If any scenes contributed
-                            loftr_filtered_results[rate_description_key][metric_name_for_loftr] = np.mean(
-                                scores_for_current_metric_at_rate
+                            loftr_filtered_results[rate_description_key][metric_name_for_loftr] = (
+                                np.mean(scores_for_current_metric_at_rate)
                             )
                             # Store count of scenes that contributed to this average
                             loftr_filtered_results[rate_description_key][
@@ -1267,12 +1454,16 @@ class BenchmarkRunner:
 
         # Calculate mean only for metrics that had at least one valid score
         final_average_scores = {
-            metric: np.mean(score_list) for metric, score_list in scores_by_metric.items() if score_list
+            metric: np.mean(score_list)
+            for metric, score_list in scores_by_metric.items()
+            if score_list
         }
 
         # Ensure counts are reported for all metrics that were in scope for this run,
         # defaulting to 0 if no valid scores were found for a metric in this folder_list.
-        final_counts_for_report = {metric: counts_by_metric.get(metric, 0) for metric in self.metrics_to_run_list}
+        final_counts_for_report = {
+            metric: counts_by_metric.get(metric, 0) for metric in self.metrics_to_run_list
+        }
 
         # Combine averages and counts into the output dictionary
         # Start with averages, then add the counts dictionary under "_counts" key
@@ -1297,7 +1488,9 @@ class BenchmarkRunner:
         report_lines.append("=" * 80)
         report_lines.append(f"Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S')}")
         report_lines.append(f"Base Results Directory: {self.base_results_dir}")
-        report_lines.append(f"Folders Discovered for Processing: {len(self.discovered_result_folders)}")
+        report_lines.append(
+            f"Folders Discovered for Processing: {len(self.discovered_result_folders)}"
+        )
 
         # self.metrics_to_run_list might have been pruned if scripts were missing.
         # This list reflects metrics actively considered during the run.
@@ -1328,18 +1521,26 @@ class BenchmarkRunner:
             df_scores = pd.DataFrame([scores_data]).T  # Transpose to have metrics as rows
             df_scores.columns = ["Average Score"]
             # Add counts for each metric, defaulting to 0 if a metric isn't in counts_info
-            df_scores["Num Scenes (N)"] = df_scores.index.map(lambda metric_name: counts_info.get(metric_name, 0))
+            df_scores["Num Scenes (N)"] = df_scores.index.map(
+                lambda metric_name: counts_info.get(metric_name, 0)
+            )
 
             # Order rows by METRICS_CONFIG definition, then any others found
             metrics_order = [m_key for m_key in METRICS_CONFIG.keys() if m_key in df_scores.index]
             # Add any metrics present in df_scores but not in METRICS_CONFIG (should not happen if data is clean)
-            remaining_metrics_order = [m_key for m_key in df_scores.index if m_key not in metrics_order]
+            remaining_metrics_order = [
+                m_key for m_key in df_scores.index if m_key not in metrics_order
+            ]
             final_metrics_order = metrics_order + remaining_metrics_order
 
-            df_scores = df_scores.reindex(final_metrics_order).dropna(subset=["Average Score"], how="all")
+            df_scores = df_scores.reindex(final_metrics_order).dropna(
+                subset=["Average Score"], how="all"
+            )
 
             if df_scores.empty:
-                section_lines.append("N/A (No valid results for specified metrics after ordering/filtering)")
+                section_lines.append(
+                    "N/A (No valid results for specified metrics after ordering/filtering)"
+                )
             else:
                 section_lines.append(df_scores.to_string())
             return section_lines
@@ -1358,9 +1559,13 @@ class BenchmarkRunner:
         )
 
         # Helper function to format a section comparing two groups
-        def format_comparison_section(comparison_data: dict, section_title: str, group_labels: list[str]) -> list[str]:
+        def format_comparison_section(
+            comparison_data: dict, section_title: str, group_labels: list[str]
+        ) -> list[str]:
             section_lines = [f"\n\n--- {section_title} ---"]
-            if not isinstance(comparison_data, dict):  # Handles "N/A (No common scenes)" string case
+            if not isinstance(
+                comparison_data, dict
+            ):  # Handles "N/A (No common scenes)" string case
                 section_lines.append(str(comparison_data))
                 return section_lines
 
@@ -1380,11 +1585,16 @@ class BenchmarkRunner:
             if not any(k != "_counts" for k in avg_group1_data.keys()) and not any(
                 k != "_counts" for k in avg_group2_data.keys()
             ):
-                section_lines.append("N/A (No valid results for comparison in either group for any metrics)")
+                section_lines.append(
+                    "N/A (No valid results for comparison in either group for any metrics)"
+                )
                 return section_lines
 
             df_comparison = pd.DataFrame(
-                {f"{group_labels[0]} Avg Score": avg_group1_data, f"{group_labels[1]} Avg Score": avg_group2_data}
+                {
+                    f"{group_labels[0]} Avg Score": avg_group1_data,
+                    f"{group_labels[1]} Avg Score": avg_group2_data,
+                }
             )
             df_comparison[f"N ({group_labels[0]})"] = df_comparison.index.map(
                 lambda metric_name: counts_group1.get(metric_name, 0)
@@ -1393,8 +1603,12 @@ class BenchmarkRunner:
                 lambda metric_name: counts_group2.get(metric_name, 0)
             )
 
-            metrics_order = [m_key for m_key in METRICS_CONFIG.keys() if m_key in df_comparison.index]
-            remaining_metrics_order = [m_key for m_key in df_comparison.index if m_key not in metrics_order]
+            metrics_order = [
+                m_key for m_key in METRICS_CONFIG.keys() if m_key in df_comparison.index
+            ]
+            remaining_metrics_order = [
+                m_key for m_key in df_comparison.index if m_key not in metrics_order
+            ]
             final_metrics_order = metrics_order + remaining_metrics_order
 
             # Drop rows where both group averages are NaN (i.e., no data for that metric in either group)
@@ -1458,7 +1672,8 @@ class BenchmarkRunner:
                 try:
                     # Extracts the first number (percentage) from the rate key for sorting
                     sorted_filter_rate_keys = sorted(
-                        all_filter_rate_keys, key=lambda k_str: int(re.search(r"\d+", k_str).group())
+                        all_filter_rate_keys,
+                        key=lambda k_str: int(re.search(r"\d+", k_str).group()),
                     )
                 except (AttributeError, ValueError):  # Fallback if regex or int conversion fails
                     sorted_filter_rate_keys = sorted(all_filter_rate_keys)
@@ -1467,7 +1682,9 @@ class BenchmarkRunner:
                 df_loftr_raw = pd.DataFrame(data_for_loftr_df)
 
                 # Reorder rows (metrics) according to METRICS_CONFIG, then columns by sorted_filter_rate_keys
-                metrics_order_for_loftr = [m_key for m_key in METRICS_CONFIG.keys() if m_key in df_loftr_raw.index]
+                metrics_order_for_loftr = [
+                    m_key for m_key in METRICS_CONFIG.keys() if m_key in df_loftr_raw.index
+                ]
                 remaining_loftr_metrics = [
                     m_key for m_key in df_loftr_raw.index if m_key not in metrics_order_for_loftr
                 ]
@@ -1475,7 +1692,9 @@ class BenchmarkRunner:
 
                 # Apply both row and column order, drop fully NaN rows/columns
                 df_loftr_styled = (
-                    df_loftr_raw.reindex(index=final_loftr_metrics_order, columns=sorted_filter_rate_keys)
+                    df_loftr_raw.reindex(
+                        index=final_loftr_metrics_order, columns=sorted_filter_rate_keys
+                    )
                     .dropna(how="all", axis=0)
                     .dropna(how="all", axis=1)
                 )
@@ -1485,7 +1704,9 @@ class BenchmarkRunner:
                         "N/A (No valid results for specified metrics/rates after LoFTR filtering and ordering)"
                     )
                 else:
-                    report_lines.append("Average metric scores when keeping only top N images based on LoFTR rank:")
+                    report_lines.append(
+                        "Average metric scores when keeping only top N images based on LoFTR rank:"
+                    )
                     report_lines.append(df_loftr_styled.to_string())
         else:  # Handles cases where loftr_analysis_data_dict is a string like "Skipped..." or "N/A..."
             report_lines.append(str(loftr_analysis_data_dict))
@@ -1501,7 +1722,9 @@ class BenchmarkRunner:
             m_name
             for m_name in metrics_for_interpretation_guide
             if m_name in METRICS_CONFIG
-            and METRICS_CONFIG[m_name][1]  # METRICS_CONFIG[m_name][1] is the "higher is better" boolean
+            and METRICS_CONFIG[m_name][
+                1
+            ]  # METRICS_CONFIG[m_name][1] is the "higher is better" boolean
         ]
         lower_is_better_metrics = [
             m_name
@@ -1510,16 +1733,26 @@ class BenchmarkRunner:
         ]
 
         if higher_is_better_metrics:
-            report_lines.append(f"  Higher is Better for: {', '.join(sorted(higher_is_better_metrics))}")
+            report_lines.append(
+                f"  Higher is Better for: {', '.join(sorted(higher_is_better_metrics))}"
+            )
         if lower_is_better_metrics:
-            report_lines.append(f"  Lower is Better for: {', '.join(sorted(lower_is_better_metrics))}")
+            report_lines.append(
+                f"  Lower is Better for: {', '.join(sorted(lower_is_better_metrics))}"
+            )
 
-        if not higher_is_better_metrics and not lower_is_better_metrics and metrics_for_interpretation_guide:
+        if (
+            not higher_is_better_metrics
+            and not lower_is_better_metrics
+            and metrics_for_interpretation_guide
+        ):
             report_lines.append(
                 "  (Interpretation for some metrics may be missing if not in METRICS_CONFIG or if none were run)"
             )
         elif not metrics_for_interpretation_guide:
-            report_lines.append("  (No metrics were specified or successfully run for interpretation guidance)")
+            report_lines.append(
+                "  (No metrics were specified or successfully run for interpretation guidance)"
+            )
         report_lines.append("=" * 80)
         return "\n".join(report_lines)
 
@@ -1527,7 +1760,9 @@ class BenchmarkRunner:
         """Main execution flow for the benchmarking process."""
         self.discover_folders()  # Uses tqdm and standard print
         if not self.discovered_result_folders:
-            print("\nNo suitable result folders found matching criteria. Exiting benchmark process.")
+            print(
+                "\nNo suitable result folders found matching criteria. Exiting benchmark process."
+            )
             return
 
         # Core metric calculation using Rich for UI
@@ -1541,9 +1776,13 @@ class BenchmarkRunner:
         ):
             self.run_loftr_ranking()
         elif not self.loftr_script_path:
-            print("\nSkipping LoFTR ranking: LoFTR script path was not configured or script not found.")
+            print(
+                "\nSkipping LoFTR ranking: LoFTR script path was not configured or script not found."
+            )
         else:  # LoFTR script exists, but no RealBench folders were found by discover_folders
-            print("\nSkipping LoFTR ranking: No 'RealBench' type folders were discovered to run LoFTR on.")
+            print(
+                "\nSkipping LoFTR ranking: No 'RealBench' type folders were discovered to run LoFTR on."
+            )
 
         # Analysis and reporting (uses standard print)
         analysis_data = self.analyze_results()
@@ -1654,13 +1893,21 @@ if __name__ == "__main__":
         per_image_root_cache.mkdir(parents=True, exist_ok=True)
 
         # Create subdirectories for per-image caches based on METRICS_CONFIG conventions
-        metrics_for_cache_setup = parsed_args.metrics if parsed_args.metrics else METRICS_CONFIG.keys()
+        metrics_for_cache_setup = (
+            parsed_args.metrics if parsed_args.metrics else METRICS_CONFIG.keys()
+        )
         for metric_name_for_cache in metrics_for_cache_setup:
             if metric_name_for_cache in METRICS_CONFIG:
                 # Determine subdirectory name (e.g., "psnr_masked", "dreamsim")
                 # This logic should match load_per_image_results
-                is_metric_masked_type = metric_name_for_cache in ["PSNR", "SSIM", "LPIPS"]  # As per original logic
-                sub_dir_cache_name = metric_name_for_cache.lower() + ("_masked" if is_metric_masked_type else "")
+                is_metric_masked_type = metric_name_for_cache in [
+                    "PSNR",
+                    "SSIM",
+                    "LPIPS",
+                ]  # As per original logic
+                sub_dir_cache_name = metric_name_for_cache.lower() + (
+                    "_masked" if is_metric_masked_type else ""
+                )
                 (per_image_root_cache / sub_dir_cache_name).mkdir(parents=True, exist_ok=True)
         print(f"Cache directories ensured under {main_cache_path}")
     except OSError as e:

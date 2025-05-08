@@ -13,6 +13,7 @@ import traceback  # Import traceback for better error printing
 # Ensure the dreamsim library is installed: pip install dreamsim
 try:
     from dreamsim import dreamsim as dreamsim_model_loader
+
     dreamsim_available = True
 except ImportError:
     print("Error: dreamsim library not found. Please install it: pip install dreamsim")
@@ -27,22 +28,23 @@ CACHE_VERSION = "1.1"  # Keep incremented cache version
 model = None
 preprocess = None
 device = None
-model_loaded = False # Flag to track loading state
+model_loaded = False  # Flag to track loading state
 
 # --- Helper Functions ---
+
 
 def _load_model_if_needed():
     """Loads the DreamSim model once, only when needed."""
     global model, preprocess, device, model_loaded, dreamsim_available
     if model_loaded:
-        return True # Already loaded successfully
+        return True  # Already loaded successfully
 
     if not dreamsim_available:
         print("DreamSim library not available, cannot load model.")
         return False
 
     if model is not None and preprocess is not None and device is not None:
-        model_loaded = True # Already loaded
+        model_loaded = True  # Already loaded
         return True
 
     print("Attempting to load DreamSim model...")
@@ -95,12 +97,12 @@ def calculate_dreamsim_distance(img_path1, img_path2, model, preprocess, device)
         processed_img2 = preprocess(image2).to(device)
 
         # --- Verify shape AFTER preprocess ---
-        expected_shape = torch.Size([1, 3, 224, 224]) # Assuming DreamSim standard
+        expected_shape = torch.Size([1, 3, 224, 224])  # Assuming DreamSim standard
         if processed_img1.shape != expected_shape or processed_img2.shape != expected_shape:
             print(
                 f"ERROR: Unexpected shape after preprocess. img1: {processed_img1.shape}, img2: {processed_img2.shape}"
             )
-            return None # Error out
+            return None  # Error out
 
         batched_img1 = processed_img1
         batched_img2 = processed_img2
@@ -116,10 +118,10 @@ def calculate_dreamsim_distance(img_path1, img_path2, model, preprocess, device)
             distance_tensor = None
 
         if not torch.is_tensor(distance_tensor):
-             print(
-                    f"Error: DreamSim model returned unexpected output or couldn't extract tensor. Type: {type(output)}, Raw: {str(output)[:100]}"
-                )
-             return None
+            print(
+                f"Error: DreamSim model returned unexpected output or couldn't extract tensor. Type: {type(output)}, Raw: {str(output)[:100]}"
+            )
+            return None
 
         # Return the scalar distance value
         return distance_tensor.item()
@@ -128,7 +130,9 @@ def calculate_dreamsim_distance(img_path1, img_path2, model, preprocess, device)
         print(f"Warning: Could not find image file: {img_path1} or {img_path2}")
         return None
     except Exception as e:
-        print(f"Error calculating DreamSim distance between {Path(img_path1).name} and {Path(img_path2).name}: {e}")
+        print(
+            f"Error calculating DreamSim distance between {Path(img_path1).name} and {Path(img_path2).name}: {e}"
+        )
         traceback.print_exc()  # Print full traceback
         return None
 
@@ -193,7 +197,9 @@ def save_cache(cache_file, data, gt_mtime, mask_mtime):
 
 
 # --- Main Function ---
-def calculate_scene_dreamsim(gt_path_str, mask_path_str, results_dir_str, cache_dir_str, num_images=DEFAULT_NUM_IMAGES):
+def calculate_scene_dreamsim(
+    gt_path_str, mask_path_str, results_dir_str, cache_dir_str, num_images=DEFAULT_NUM_IMAGES
+):
     """
     Calculates the average DreamSim distance for a given scene.
     Loads the model only if needed.
@@ -222,7 +228,7 @@ def calculate_scene_dreamsim(gt_path_str, mask_path_str, results_dir_str, cache_
         # Check if cached average is valid (not None)
         avg_cache = cached_results.get("average")
         if avg_cache is not None:
-            print(f"Cache hit for {results_dir_name}") # Print hit here
+            print(f"Cache hit for {results_dir_name}")  # Print hit here
             return avg_cache
         else:
             print(f"Cached average for {results_dir_name} was None. Recalculating.")
@@ -239,7 +245,9 @@ def calculate_scene_dreamsim(gt_path_str, mask_path_str, results_dir_str, cache_
     valid_image_count = 0
     per_image_scores = {}  # Store distances here
 
-    image_files = sorted([p for p in results_dir.glob("*.png") if p.stem.isdigit()], key=lambda x: int(x.stem))
+    image_files = sorted(
+        [p for p in results_dir.glob("*.png") if p.stem.isdigit()], key=lambda x: int(x.stem)
+    )
     image_files = image_files[:num_images]
 
     if not image_files:
@@ -253,7 +261,9 @@ def calculate_scene_dreamsim(gt_path_str, mask_path_str, results_dir_str, cache_
         result_img_path = results_dir / result_img_name
 
         if result_img_path.is_file():
-            distance = calculate_dreamsim_distance(gt_path, result_img_path, model, preprocess, device)
+            distance = calculate_dreamsim_distance(
+                gt_path, result_img_path, model, preprocess, device
+            )
             if distance is not None:  # Check calculation success
                 total_distance += distance
                 per_image_scores[result_img_name] = distance  # Store distance
@@ -265,13 +275,22 @@ def calculate_scene_dreamsim(gt_path_str, mask_path_str, results_dir_str, cache_
 
     if valid_image_count == 0:
         print(f"Error: No valid result images processed for DreamSim distance in {results_dir}")
-        save_cache(cache_file, {"average": None, "per_image": per_image_scores, "count": 0}, gt_mtime, mask_mtime)
+        save_cache(
+            cache_file,
+            {"average": None, "per_image": per_image_scores, "count": 0},
+            gt_mtime,
+            mask_mtime,
+        )
         return None
 
     average_distance = total_distance / valid_image_count
 
     # --- Save to Cache ---
-    cache_data = {"average": average_distance, "per_image": per_image_scores, "count": valid_image_count}
+    cache_data = {
+        "average": average_distance,
+        "per_image": per_image_scores,
+        "count": valid_image_count,
+    }
     save_cache(cache_file, cache_data, gt_mtime, mask_mtime)
 
     return average_distance
@@ -279,13 +298,30 @@ def calculate_scene_dreamsim(gt_path_str, mask_path_str, results_dir_str, cache_
 
 # --- Command Line Interface ---
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Calculate DreamSim distance for a RealFill result scene.")
-    parser.add_argument("--gt_path", type=str, required=True, help="Path to the ground truth image.")
-    parser.add_argument("--mask_path", type=str, required=True, help="Path to the mask image (for cache validation).")
-    parser.add_argument(
-        "--results_dir", type=str, required=True, help="Path to the directory containing result images."
+    parser = argparse.ArgumentParser(
+        description="Calculate DreamSim distance for a RealFill result scene."
     )
-    parser.add_argument("--cache_dir", type=str, required=True, help="Path to the base directory for caching results.")
+    parser.add_argument(
+        "--gt_path", type=str, required=True, help="Path to the ground truth image."
+    )
+    parser.add_argument(
+        "--mask_path",
+        type=str,
+        required=True,
+        help="Path to the mask image (for cache validation).",
+    )
+    parser.add_argument(
+        "--results_dir",
+        type=str,
+        required=True,
+        help="Path to the directory containing result images.",
+    )
+    parser.add_argument(
+        "--cache_dir",
+        type=str,
+        required=True,
+        help="Path to the base directory for caching results.",
+    )
     parser.add_argument(
         "--num_images",
         type=int,
@@ -316,4 +352,4 @@ if __name__ == "__main__":
         print(f"FINAL_SCORE:{avg_score:.8f}")
     else:
         print(f"\nFailed to calculate DreamSim distance for {Path(args.results_dir).name}")
-        print("FINAL_SCORE:ERROR") # Print error if calculation failed (e.g., model load failed)
+        print("FINAL_SCORE:ERROR")  # Print error if calculation failed (e.g., model load failed)

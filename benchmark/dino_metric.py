@@ -11,7 +11,7 @@ from torch.nn import functional as F
 from transformers import ViTModel
 from tqdm import tqdm
 import time
-import traceback # Added for better error logging
+import traceback  # Added for better error logging
 
 # --- Constants ---
 DEFAULT_NUM_IMAGES = 16
@@ -22,7 +22,9 @@ try:
     # Standard DINOv1/v2 transforms (ViT-S/16 from facebook/dino-vits16 expects 224)
     T = transforms.Compose(
         [
-            transforms.Resize(256, interpolation=transforms.InterpolationMode.BICUBIC),  # Follows DINO paper
+            transforms.Resize(
+                256, interpolation=transforms.InterpolationMode.BICUBIC
+            ),  # Follows DINO paper
             transforms.CenterCrop(224),
             transforms.ToTensor(),
             transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
@@ -36,18 +38,19 @@ except Exception as e:
 # --- Model Variables (Initialize to None) ---
 model = None
 device = None
-model_loaded = False # Flag to track loading state
+model_loaded = False  # Flag to track loading state
 
 # --- Helper Functions ---
+
 
 def _load_model_if_needed():
     """Loads the DINO model once, only when needed."""
     global model, device, model_loaded
     if model_loaded:
-        return True # Already loaded successfully
+        return True  # Already loaded successfully
 
     if model is not None and device is not None:
-        model_loaded = True # Should be caught by flag, but safe check
+        model_loaded = True  # Should be caught by flag, but safe check
         return True
 
     print("Attempting to load DINO model (facebook/dino-vits16)...")
@@ -116,10 +119,14 @@ def calculate_dino_similarity(img_path1, img_path2, model, transform, device):
         print(f"Warning: Could not find image file: {img_path1} or {img_path2}")
         return 0.0
     except RuntimeError as e:
-        print(f"RuntimeError during DINO calculation for {Path(img_path1).name}/{Path(img_path2).name}: {e}")
+        print(
+            f"RuntimeError during DINO calculation for {Path(img_path1).name}/{Path(img_path2).name}: {e}"
+        )
         return 0.0
     except Exception as e:
-        print(f"Error calculating DINO similarity between {Path(img_path1).name} and {Path(img_path2).name}: {e}")
+        print(
+            f"Error calculating DINO similarity between {Path(img_path1).name} and {Path(img_path2).name}: {e}"
+        )
         # traceback.print_exc() # Optional
         return 0.0
 
@@ -182,7 +189,9 @@ def save_cache(cache_file, data, gt_mtime, mask_mtime):
 
 
 # --- Main Function ---
-def calculate_scene_dino(gt_path_str, mask_path_str, results_dir_str, cache_dir_str, num_images=DEFAULT_NUM_IMAGES):
+def calculate_scene_dino(
+    gt_path_str, mask_path_str, results_dir_str, cache_dir_str, num_images=DEFAULT_NUM_IMAGES
+):
     """
     Calculates the average DINO CLS token similarity for a given scene.
     Loads the model only if needed.
@@ -199,7 +208,7 @@ def calculate_scene_dino(gt_path_str, mask_path_str, results_dir_str, cache_dir_
     if not results_dir.is_dir():
         print(f"Error: Results directory not found at {results_dir}")
         return None
-    if T is None: # Check if transforms loaded
+    if T is None:  # Check if transforms loaded
         print("Error: DINO transforms failed to define. Cannot proceed.")
         return None
 
@@ -224,7 +233,9 @@ def calculate_scene_dino(gt_path_str, mask_path_str, results_dir_str, cache_dir_
     valid_image_count = 0
     per_image_scores = {}
 
-    image_files = sorted([p for p in results_dir.glob("*.png") if p.stem.isdigit()], key=lambda x: int(x.stem))
+    image_files = sorted(
+        [p for p in results_dir.glob("*.png") if p.stem.isdigit()], key=lambda x: int(x.stem)
+    )
     image_files = image_files[:num_images]
 
     if not image_files:
@@ -244,8 +255,8 @@ def calculate_scene_dino(gt_path_str, mask_path_str, results_dir_str, cache_dir_
                 per_image_scores[result_img_name] = similarity
                 valid_image_count += 1
             else:
-                 print(f"Skipping DINO for {result_img_name} due to error (returned None).")
-                 per_image_scores[result_img_name] = None # Mark error
+                print(f"Skipping DINO for {result_img_name} due to error (returned None).")
+                per_image_scores[result_img_name] = None  # Mark error
 
         else:
             # print(f"Warning: Result image {result_img_name} not found in {results_dir}")
@@ -253,13 +264,22 @@ def calculate_scene_dino(gt_path_str, mask_path_str, results_dir_str, cache_dir_
 
     if valid_image_count == 0:
         print(f"Error: No valid result images processed for DINO similarity in {results_dir}")
-        save_cache(cache_file, {"average": None, "per_image": per_image_scores, "count": 0}, gt_mtime, mask_mtime)
+        save_cache(
+            cache_file,
+            {"average": None, "per_image": per_image_scores, "count": 0},
+            gt_mtime,
+            mask_mtime,
+        )
         return None
 
     average_similarity = total_similarity / valid_image_count
 
     # --- Save to Cache ---
-    cache_data = {"average": average_similarity, "per_image": per_image_scores, "count": valid_image_count}
+    cache_data = {
+        "average": average_similarity,
+        "per_image": per_image_scores,
+        "count": valid_image_count,
+    }
     save_cache(cache_file, cache_data, gt_mtime, mask_mtime)
 
     return average_similarity
@@ -267,13 +287,30 @@ def calculate_scene_dino(gt_path_str, mask_path_str, results_dir_str, cache_dir_
 
 # --- Command Line Interface ---
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Calculate DINO CLS similarity for a RealFill result scene.")
-    parser.add_argument("--gt_path", type=str, required=True, help="Path to the ground truth image.")
-    parser.add_argument("--mask_path", type=str, required=True, help="Path to the mask image (for cache validation).")
-    parser.add_argument(
-        "--results_dir", type=str, required=True, help="Path to the directory containing result images."
+    parser = argparse.ArgumentParser(
+        description="Calculate DINO CLS similarity for a RealFill result scene."
     )
-    parser.add_argument("--cache_dir", type=str, required=True, help="Path to the base directory for caching results.")
+    parser.add_argument(
+        "--gt_path", type=str, required=True, help="Path to the ground truth image."
+    )
+    parser.add_argument(
+        "--mask_path",
+        type=str,
+        required=True,
+        help="Path to the mask image (for cache validation).",
+    )
+    parser.add_argument(
+        "--results_dir",
+        type=str,
+        required=True,
+        help="Path to the directory containing result images.",
+    )
+    parser.add_argument(
+        "--cache_dir",
+        type=str,
+        required=True,
+        help="Path to the base directory for caching results.",
+    )
     parser.add_argument(
         "--num_images",
         type=int,
@@ -288,7 +325,9 @@ if __name__ == "__main__":
     dino_cache_dir.mkdir(parents=True, exist_ok=True)
 
     # calculate_scene_dino will handle model loading internally
-    avg_score = calculate_scene_dino(args.gt_path, args.mask_path, args.results_dir, args.cache_dir, args.num_images)
+    avg_score = calculate_scene_dino(
+        args.gt_path, args.mask_path, args.results_dir, args.cache_dir, args.num_images
+    )
 
     if avg_score is not None:
         print(f"\nAverage DINO Similarity for {Path(args.results_dir).name}: {avg_score:.4f}")
