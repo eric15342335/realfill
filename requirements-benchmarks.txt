@@ -19,3 +19,5 @@ timm   # Dependency for DreamSim
 # Utilities & Data Handling
 pandas # For formatting results tables
 tqdm   # Progress bars
+rich
+matplotlib
