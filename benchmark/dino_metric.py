@@ -1,294 +1,82 @@
 # benchmark/dino_metric.py
 
-import torch
+# --- Lightweight Imports First ---
 import argparse
 import json
 import os
-from pathlib import Path
-from PIL import Image
-from torchvision import transforms
-from torch.nn import functional as F
-from transformers import ViTModel
-from tqdm import tqdm
+import sys
 import time
-import traceback  # Added for better error logging
+import traceback
+from pathlib import Path
 
-# --- Constants ---
+# --- Constants (Lightweight) ---
 DEFAULT_NUM_IMAGES = 16
-CACHE_VERSION = "1.0"  # Increment if caching logic changes
+CACHE_VERSION = "1.0"  # Version for the cache structure
+METRIC_NAME = "dino"  # Specific to this metric, used for cache path
 
-# --- DINO Transforms (Define globally, they are lightweight) ---
-try:
-    # Standard DINOv1/v2 transforms (ViT-S/16 from facebook/dino-vits16 expects 224)
-    T = transforms.Compose(
-        [
-            transforms.Resize(
-                256, interpolation=transforms.InterpolationMode.BICUBIC
-            ),  # Follows DINO paper
-            transforms.CenterCrop(224),
-            transforms.ToTensor(),
-            transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
-        ]
+# --- Lightweight Helper Functions for Cache Handling ---
+
+
+def get_cache_path_light(
+    cache_dir_str: str, results_dir_name_str: str, metric_name_str: str
+) -> Path:
+    """Constructs the cache file path using only basic types."""
+    return (
+        Path(cache_dir_str) / "per_scene_cache" / metric_name_str / f"{results_dir_name_str}.json"
     )
-    print("DINO transforms defined.")
-except Exception as e:
-    print(f"Error defining transforms: {e}")
-    T = None
-
-# --- Model Variables (Initialize to None) ---
-model = None
-device = None
-model_loaded = False  # Flag to track loading state
-
-# --- Helper Functions ---
 
 
-def _load_model_if_needed():
-    """Loads the DINO model once, only when needed."""
-    global model, device, model_loaded
-    if model_loaded:
-        return True  # Already loaded successfully
-
-    if model is not None and device is not None:
-        model_loaded = True  # Should be caught by flag, but safe check
-        return True
-
-    print("Attempting to load DINO model (facebook/dino-vits16)...")
+def get_modification_time_light(file_path_str: str) -> float:
+    """Gets file modification time; returns 0 if file not found."""
     try:
-        # Using ViT-S/16 as in the original script
-        _model = ViTModel.from_pretrained("facebook/dino-vits16")
-        _device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        _model.to(_device)
-        _model.eval()  # Set to evaluation mode
-
-        # Assign to global variables only after successful loading
-        model = _model
-        device = _device
-        model_loaded = True
-        print(f"DINO model loaded successfully on {device}.")
-        return True
-    except Exception as e:
-        print(f"FATAL Error loading DINO model: {e}")
-        traceback.print_exc()
-        # Ensure globals remain None on failure
-        model = None
-        device = None
-        model_loaded = False
-        return False
-
-
-def get_modification_time(file_path):
-    """Gets the modification time of a file."""
-    try:
-        return os.path.getmtime(file_path)
+        return os.path.getmtime(file_path_str)
     except OSError:
-        return 0
-
-
-def calculate_dino_similarity(img_path1, img_path2, model, transform, device):
-    """Calculates DINO CLS token cosine similarity between two images."""
-    # Safeguard checks inside the loop
-    if not model or not transform:
-        print("DINO model/transform not available during similarity calculation.")
-        return 0.0
-
-    try:
-        img1 = Image.open(img_path1).convert("RGB")
-        img2 = Image.open(img_path2).convert("RGB")
-
-        # Apply transforms
-        t_img1 = transform(img1)
-        t_img2 = transform(img2)
-
-        # Add batch dimension
-        inputs = torch.stack([t_img1, t_img2]).to(device)  # Batch size = 2
-
-        with torch.no_grad():
-            outputs = model(inputs)
-
-        # Extract CLS tokens
-        last_hidden_states = outputs.last_hidden_state
-        emb_img1 = last_hidden_states[0, 0]  # CLS token for image 1
-        emb_img2 = last_hidden_states[1, 0]  # CLS token for image 2
-
-        # Calculate cosine similarity
-        similarity = F.cosine_similarity(emb_img1, emb_img2, dim=0)
-        return similarity.item()
-
-    except FileNotFoundError:
-        print(f"Warning: Could not find image file: {img_path1} or {img_path2}")
-        return 0.0
-    except RuntimeError as e:
-        print(
-            f"RuntimeError during DINO calculation for {Path(img_path1).name}/{Path(img_path2).name}: {e}"
-        )
-        return 0.0
-    except Exception as e:
-        print(
-            f"Error calculating DINO similarity between {Path(img_path1).name} and {Path(img_path2).name}: {e}"
-        )
-        # traceback.print_exc() # Optional
         return 0.0
 
 
-def get_cache_path(cache_dir, results_dir_name):
-    """Constructs the path for the cache file."""
-    return Path(cache_dir) / "per_scene_cache" / "dino" / f"{results_dir_name}.json"
-
-
-def load_cache(cache_file, gt_mtime_current, mask_mtime_current):
-    """Loads results from cache if valid."""
-    if not cache_file.exists():
+def load_cache_light(
+    cache_file_path: Path,
+    gt_mtime_current: float,
+    mask_mtime_current: float,
+    expected_cache_version: str,
+) -> dict | None:
+    """
+    Loads and validates cache using only lightweight operations.
+    Returns cache data if valid and contains a non-None 'average' score, otherwise None.
+    """
+    if not cache_file_path.is_file():
         return None
-
     try:
-        with open(cache_file, "r") as f:
+        with open(cache_file_path, "r", encoding="utf-8") as f:
             cache_data = json.load(f)
 
-        # Validation
+        metadata = cache_data.get("metadata")
         if (
             not isinstance(cache_data, dict)
             or "average" not in cache_data
-            or "per_image" not in cache_data
-            or "metadata" not in cache_data
-            or cache_data.get("metadata", {}).get("cache_version") != CACHE_VERSION
+            or not isinstance(metadata, dict)
+            or metadata.get("cache_version") != expected_cache_version
         ):
-            print(f"Cache file {cache_file} format invalid or version mismatch. Recalculating.")
             return None
 
-        if gt_mtime_current and cache_data["metadata"].get("gt_mtime") != gt_mtime_current:
-            print(f"Ground truth mtime changed for {cache_file.name}. Recalculating.")
+        if gt_mtime_current and metadata.get("gt_mtime") != gt_mtime_current:
             return None
-        # No mask used in calculation, but keep check for consistency if desired
-        # if mask_mtime_current and cache_data["metadata"].get("mask_mtime") != mask_mtime_current:
-        #     print(f"Mask mtime changed for {cache_file.name}. Recalculating.")
-        #     return None
+        # DINO doesn't use mask for calculation, but mtime check kept for consistency.
+        if mask_mtime_current and metadata.get("mask_mtime") != mask_mtime_current:
+            return None
 
-        print(f"Cache hit for {cache_file.name}")
+        if cache_data.get("average") is None:
+            return None
+
         return cache_data
-    except (json.JSONDecodeError, KeyError, Exception) as e:
-        print(f"Error loading cache file {cache_file}: {e}. Recalculating.")
+    except (json.JSONDecodeError, KeyError, OSError):
         return None
 
 
-def save_cache(cache_file, data, gt_mtime, mask_mtime):
-    """Saves results to the cache file."""
-    try:
-        cache_file.parent.mkdir(parents=True, exist_ok=True)
-        data["metadata"] = {
-            "timestamp": time.time(),
-            "gt_mtime": gt_mtime,
-            "mask_mtime": mask_mtime,
-            "cache_version": CACHE_VERSION,
-        }
-        with open(cache_file, "w") as f:
-            json.dump(data, f, indent=4)
-        # print(f"Saved cache to {cache_file}")
-    except Exception as e:
-        print(f"Error saving cache to {cache_file}: {e}")
-
-
-# --- Main Function ---
-def calculate_scene_dino(
-    gt_path_str, mask_path_str, results_dir_str, cache_dir_str, num_images=DEFAULT_NUM_IMAGES
-):
-    """
-    Calculates the average DINO CLS token similarity for a given scene.
-    Loads the model only if needed.
-    """
-    gt_path = Path(gt_path_str)
-    mask_path = Path(mask_path_str)
-    results_dir = Path(results_dir_str)
-    cache_dir = Path(cache_dir_str)
-
-    # --- Input Validation ---
-    if not gt_path.is_file():
-        print(f"Error: Ground truth image not found at {gt_path}")
-        return None
-    if not results_dir.is_dir():
-        print(f"Error: Results directory not found at {results_dir}")
-        return None
-    if T is None:  # Check if transforms loaded
-        print("Error: DINO transforms failed to define. Cannot proceed.")
-        return None
-
-    results_dir_name = results_dir.name
-    cache_file = get_cache_path(cache_dir, results_dir_name)
-
-    # --- Cache Check ---
-    gt_mtime = get_modification_time(gt_path)
-    mask_mtime = get_modification_time(mask_path)
-    cached_results = load_cache(cache_file, gt_mtime, mask_mtime)
-    if cached_results:
-        return cached_results.get("average")
-
-    # --- Model Loading (Only if needed) ---
-    if not _load_model_if_needed():
-        print("Error: Failed to load DINO model. Cannot proceed.")
-        return None
-
-    # --- Calculation ---
-    print(f"Calculating DINO for scene: {results_dir_name}")
-    total_similarity = 0.0
-    valid_image_count = 0
-    per_image_scores = {}
-
-    image_files = sorted(
-        [p for p in results_dir.glob("*.png") if p.stem.isdigit()], key=lambda x: int(x.stem)
-    )
-    image_files = image_files[:num_images]
-
-    if not image_files:
-        print(f"Warning: No valid result images (0..{num_images-1}.png) found in {results_dir}")
-        save_cache(cache_file, {"average": 0.0, "per_image": {}, "count": 0}, gt_mtime, mask_mtime)
-        return 0.0
-
-    # Pass loaded model, T, device to helper
-    for i in tqdm(range(num_images), desc=f"DINO Processing {results_dir_name}", leave=False):
-        result_img_name = f"{i}.png"
-        result_img_path = results_dir / result_img_name
-
-        if result_img_path.is_file():
-            similarity = calculate_dino_similarity(gt_path, result_img_path, model, T, device)
-            if similarity is not None:  # Check for successful calculation
-                total_similarity += similarity
-                per_image_scores[result_img_name] = similarity
-                valid_image_count += 1
-            else:
-                print(f"Skipping DINO for {result_img_name} due to error (returned None).")
-                per_image_scores[result_img_name] = None  # Mark error
-
-        else:
-            # print(f"Warning: Result image {result_img_name} not found in {results_dir}")
-            per_image_scores[result_img_name] = None
-
-    if valid_image_count == 0:
-        print(f"Error: No valid result images processed for DINO similarity in {results_dir}")
-        save_cache(
-            cache_file,
-            {"average": None, "per_image": per_image_scores, "count": 0},
-            gt_mtime,
-            mask_mtime,
-        )
-        return None
-
-    average_similarity = total_similarity / valid_image_count
-
-    # --- Save to Cache ---
-    cache_data = {
-        "average": average_similarity,
-        "per_image": per_image_scores,
-        "count": valid_image_count,
-    }
-    save_cache(cache_file, cache_data, gt_mtime, mask_mtime)
-
-    return average_similarity
-
-
-# --- Command Line Interface ---
+# --- Main execution block ---
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="Calculate DINO CLS similarity for a RealFill result scene."
+        description="Calculate DINO CLS token similarity with early cache exit."
     )
     parser.add_argument(
         "--gt_path", type=str, required=True, help="Path to the ground truth image."
@@ -297,7 +85,7 @@ if __name__ == "__main__":
         "--mask_path",
         type=str,
         required=True,
-        help="Path to the mask image (for cache validation).",
+        help="Path to the mask image (for mtime validation).",
     )
     parser.add_argument(
         "--results_dir",
@@ -317,21 +105,172 @@ if __name__ == "__main__":
         default=DEFAULT_NUM_IMAGES,
         help=f"Number of result images per scene (default: {DEFAULT_NUM_IMAGES}).",
     )
-
     args = parser.parse_args()
 
-    # Ensure cache subdirectories exist
-    dino_cache_dir = Path(args.cache_dir) / "per_scene_cache" / "dino"
-    dino_cache_dir.mkdir(parents=True, exist_ok=True)
+    current_results_dir_name = Path(args.results_dir).name
+    cache_file = get_cache_path_light(args.cache_dir, current_results_dir_name, METRIC_NAME)
+    current_gt_mtime = get_modification_time_light(args.gt_path)
+    current_mask_mtime = get_modification_time_light(args.mask_path)
 
-    # calculate_scene_dino will handle model loading internally
-    avg_score = calculate_scene_dino(
-        args.gt_path, args.mask_path, args.results_dir, args.cache_dir, args.num_images
-    )
+    cached_data = load_cache_light(cache_file, current_gt_mtime, current_mask_mtime, CACHE_VERSION)
 
-    if avg_score is not None:
-        print(f"\nAverage DINO Similarity for {Path(args.results_dir).name}: {avg_score:.4f}")
-        print(f"FINAL_SCORE:{avg_score:.8f}")
+    if cached_data:
+        cached_avg_score = cached_data.get("average")
+        if cached_avg_score is not None:
+            print(f"FINAL_SCORE:{cached_avg_score:.8f}")
+            sys.exit(0)
+
+    try:
+        import torch
+        from PIL import Image
+        from torch.nn import functional as F_torch  # Alias to avoid conflict if F is used elsewhere
+        from torchvision import transforms
+        from tqdm import tqdm
+        from transformers import ViTModel
+    except ImportError as e:
+        print(f"Error: Missing heavy libraries for DINO calculation: {e}")
+        print("FINAL_SCORE:ERROR")
+        sys.exit(1)
+
+    # --- Global Variables for Model and Transforms (Heavy Path) ---
+    heavy_model = None
+    heavy_device = None
+    heavy_model_loaded = False
+    dino_transform = None  # Will be initialized in _load_model_if_needed_heavy
+
+    def _load_model_if_needed_heavy():
+        global heavy_model, heavy_device, heavy_model_loaded, dino_transform
+        if heavy_model_loaded:
+            return True
+        try:
+            heavy_device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+            heavy_model = ViTModel.from_pretrained("facebook/dino-vits16").to(heavy_device).eval()
+
+            # Standard DINOv1/v2 transforms
+            dino_transform = transforms.Compose(
+                [
+                    transforms.Resize(256, interpolation=transforms.InterpolationMode.BICUBIC),
+                    transforms.CenterCrop(224),
+                    transforms.ToTensor(),
+                    transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
+                ]
+            )
+            heavy_model_loaded = True
+            return True
+        except Exception as e_load:
+            print(f"FATAL Error loading DINO model or defining transforms (heavy path): {e_load}")
+            traceback.print_exc()
+            heavy_model, heavy_device, heavy_model_loaded, dino_transform = None, None, False, None
+            return False
+
+    @torch.no_grad()
+    def calculate_dino_similarity_heavy(img_path1_str: str, img_path2_str: str) -> float | None:
+        if not heavy_model_loaded or dino_transform is None:
+            return None
+        try:
+            img1 = Image.open(img_path1_str).convert("RGB")
+            img2 = Image.open(img_path2_str).convert("RGB")
+
+            t_img1 = dino_transform(img1)
+            t_img2 = dino_transform(img2)
+            inputs = torch.stack([t_img1, t_img2]).to(heavy_device)
+            outputs = heavy_model(inputs)
+            last_hidden_states = outputs.last_hidden_state
+            emb_img1 = last_hidden_states[0, 0]  # CLS token for image 1
+            emb_img2 = last_hidden_states[1, 0]  # CLS token for image 2
+            similarity = F_torch.cosine_similarity(emb_img1, emb_img2, dim=0)
+            return similarity.item()
+        except FileNotFoundError:
+            return None
+        except Exception:
+            return None
+
+    def save_cache_heavy(
+        cache_file_path: Path,
+        data_to_save: dict,
+        gt_mtime: float,
+        mask_mtime: float,
+        current_cache_version: str,
+    ):
+        try:
+            cache_file_path.parent.mkdir(parents=True, exist_ok=True)
+            data_to_save["metadata"] = {
+                "timestamp": time.time(),
+                "gt_mtime": gt_mtime,
+                "mask_mtime": mask_mtime,
+                "cache_version": current_cache_version,
+            }
+            with open(cache_file_path, "w", encoding="utf-8") as f:
+                json.dump(data_to_save, f, indent=4)
+        except Exception as e_save:
+            print(f"Error saving cache (heavy path) to {cache_file_path}: {e_save}")
+
+    # --- Main Calculation Logic (Heavy Path) ---
+    final_average_score = None
+    if not _load_model_if_needed_heavy():
+        print("Error: Failed to load DINO model (heavy path). Cannot proceed.")
+        print("FINAL_SCORE:ERROR")
+        sys.exit(1)
+
+    gt_path_obj = Path(args.gt_path)
+    results_dir_obj = Path(args.results_dir)
+    total_similarity_val = 0.0
+    valid_image_count_val = 0
+    per_image_scores_dict = {}
+
+    image_paths_to_process = []
+    for i in range(args.num_images):
+        img_p = results_dir_obj / f"{i}.png"
+        if img_p.is_file():
+            image_paths_to_process.append(img_p)
+        else:
+            per_image_scores_dict[f"{i}.png"] = None
+
+    if not image_paths_to_process and args.num_images > 0:
+        save_cache_heavy(
+            cache_file,
+            {"average": None, "per_image": per_image_scores_dict, "count": 0},
+            current_gt_mtime,
+            current_mask_mtime,
+            CACHE_VERSION,
+        )
+        print("FINAL_SCORE:ERROR")
+        sys.exit(0)
+
+    for result_img_path_obj in tqdm(
+        image_paths_to_process,
+        desc=f"DINO Processing {current_results_dir_name}",
+        leave=False,
+        disable=not sys.stdout.isatty(),
+    ):
+        similarity = calculate_dino_similarity_heavy(str(gt_path_obj), str(result_img_path_obj))
+        if similarity is not None:
+            total_similarity_val += similarity
+            per_image_scores_dict[result_img_path_obj.name] = similarity
+            valid_image_count_val += 1
+        else:
+            per_image_scores_dict[result_img_path_obj.name] = None
+
+    if valid_image_count_val > 0:
+        final_average_score = total_similarity_val / valid_image_count_val
+        cache_data_to_save = {
+            "average": final_average_score,
+            "per_image": per_image_scores_dict,
+            "count": valid_image_count_val,
+        }
+        save_cache_heavy(
+            cache_file, cache_data_to_save, current_gt_mtime, current_mask_mtime, CACHE_VERSION
+        )
     else:
-        print(f"\nFailed to calculate DINO similarity for {Path(args.results_dir).name}")
+        save_cache_heavy(
+            cache_file,
+            {"average": None, "per_image": per_image_scores_dict, "count": 0},
+            current_gt_mtime,
+            current_mask_mtime,
+            CACHE_VERSION,
+        )
+
+    if final_average_score is not None:
+        print(f"FINAL_SCORE:{final_average_score:.8f}")
+    else:
         print("FINAL_SCORE:ERROR")

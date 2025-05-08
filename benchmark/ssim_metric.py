@@ -1,305 +1,78 @@
 # benchmark/ssim_metric.py
 
-import cv2
-import numpy as np
+# --- Lightweight Imports First ---
 import argparse
 import json
 import os
 from pathlib import Path
-from tqdm import tqdm
 import time
-import math  # Keep for potential future use, though original SSIM doesn't use log
+import sys
 
-# --- Constants ---
+# math is not directly used by SSIM usually, but good to have if variations are considered
+
+# --- Constants (Lightweight) ---
 DEFAULT_NUM_IMAGES = 16
 CACHE_VERSION = "1.0"
-TARGET_SIZE = (512, 512)  # Resize dimension used in the original script
+METRIC_NAME = "ssim_masked"  # Explicitly denote that it's masked
+SSIM_TARGET_SIZE = (512, 512)  # Default, can be made configurable
 
-# --- SSIM Calculation Logic (Adapted from original SSIM.py) ---
+# --- Lightweight Helper Functions for Cache Handling ---
 
 
-def ssim_filled(img1, img2, mask, C1=(0.01 * 255) ** 2, C2=(0.03 * 255) ** 2):
-    """
-    Calculates SSIM only for the filled-in regions defined by the mask.
-    Adapted from the user's original SSIM.py.
-    Assumes img1, img2 are numpy arrays [H, W] (grayscale) [0, 255].
-    Mask is numpy array [H, W] where >0 indicates filled region.
-    """
-    img1 = img1.astype(np.float64)
-    img2 = img2.astype(np.float64)
-    mask_bool = mask > 0  # Boolean mask for filled regions
+def get_cache_path_light(
+    cache_dir_str: str, results_dir_name_str: str, metric_name_str: str
+) -> Path:
+    return (
+        Path(cache_dir_str) / "per_scene_cache" / metric_name_str / f"{results_dir_name_str}.json"
+    )
 
-    if not np.any(mask_bool):
-        # print("Warning: Mask is empty for SSIM calculation.")
-        return 0.0  # No region to compare
 
-    # Using OpenCV's filter2D for windowed calculations is generally faster
-    # Use a Gaussian window as standard for SSIM
-    kernel_size = 11
-    sigma = 1.5
-    window = cv2.getGaussianKernel(kernel_size, sigma)
-    window = np.outer(window, window.transpose())  # 2D Gaussian window
-
-    # --- Calculate means ---
-    mu1 = cv2.filter2D(img1, -1, window, borderType=cv2.BORDER_REPLICATE)
-    mu2 = cv2.filter2D(img2, -1, window, borderType=cv2.BORDER_REPLICATE)
-
-    # --- Calculate variances and covariance ---
-    mu1_sq = mu1**2
-    mu2_sq = mu2**2
-    mu1_mu2 = mu1 * mu2
-
-    sigma1_sq = cv2.filter2D(img1**2, -1, window, borderType=cv2.BORDER_REPLICATE) - mu1_sq
-    sigma2_sq = cv2.filter2D(img2**2, -1, window, borderType=cv2.BORDER_REPLICATE) - mu2_sq
-    sigma12 = cv2.filter2D(img1 * img2, -1, window, borderType=cv2.BORDER_REPLICATE) - mu1_mu2
-
-    # Clamp negative variances to zero (can happen due to floating point errors)
-    sigma1_sq = np.maximum(0.0, sigma1_sq)
-    sigma2_sq = np.maximum(0.0, sigma2_sq)
-
-    # --- Calculate SSIM map ---
-    # Numerator: (2 * mu1 * mu2 + C1) * (2 * sigma12 + C2)
-    # Denominator: (mu1^2 + mu2^2 + C1) * (sigma1^2 + sigma2^2 + C2)
-    numerator = (2 * mu1_mu2 + C1) * (2 * sigma12 + C2)
-    denominator = (mu1_sq + mu2_sq + C1) * (sigma1_sq + sigma2_sq + C2)
-    ssim_map = numerator / denominator
-
-    # --- Average SSIM over the masked region ---
-    ssim_masked_values = ssim_map[mask_bool]
-
-    if ssim_masked_values.size == 0:
-        # print("Warning: No valid SSIM values in masked region.")
+def get_modification_time_light(file_path_str: str) -> float:
+    try:
+        return os.path.getmtime(file_path_str)
+    except OSError:
         return 0.0
 
-    mean_ssim = np.mean(ssim_masked_values)
 
-    # Clamp result to [0, 1] range (SSIM can sometimes slightly exceed 1 due to numerics)
-    return np.clip(mean_ssim, 0.0, 1.0)
-
-
-def calculate_ssim_masked(img1_color, img2_color, mask):
-    """
-    Calculates average SSIM over color channels for the masked region.
-    img1_color, img2_color: Numpy arrays [H, W, C], BGR format [0, 255]
-    mask: Numpy array [H, W], grayscale [0, 255]
-    """
-    if img1_color.shape != img2_color.shape or img1_color.shape[:2] != mask.shape[:2]:
-        print(
-            f"Warning: Shape mismatch in SSIM input. GT: {img1_color.shape}, Gen: {img2_color.shape}, Mask: {mask.shape}"
-        )
-        return None  # Indicate error
-
-    if img1_color.ndim == 2:  # Grayscale case
-        return ssim_filled(img1_color, img2_color, mask)
-    elif img1_color.ndim == 3 and img1_color.shape[2] == 3:  # Color image
-        ssims = []
-        for i in range(3):  # Iterate over B, G, R channels
-            channel_ssim = ssim_filled(img1_color[:, :, i], img2_color[:, :, i], mask)
-            if channel_ssim is None:  # Propagate error if single channel fails
-                return None
-            ssims.append(channel_ssim)
-        return np.mean(ssims)
-    else:
-        print(f"Warning: Unsupported image dimensions for SSIM: {img1_color.shape}")
-        return None
-
-
-# --- Helper Functions (Caching etc.) ---
-
-
-def get_modification_time(file_path):
-    try:
-        return os.path.getmtime(file_path)
-    except OSError:
-        return 0
-
-
-def get_cache_path(cache_dir, results_dir_name):
-    return Path(cache_dir) / "per_scene_cache" / "ssim_masked" / f"{results_dir_name}.json"
-
-
-def load_cache(cache_file, gt_mtime_current, mask_mtime_current):
-    if not cache_file.exists():
+def load_cache_light(
+    cache_file_path: Path,
+    gt_mtime_current: float,
+    mask_mtime_current: float,
+    expected_cache_version: str,
+) -> dict | None:
+    if not cache_file_path.is_file():
         return None
     try:
-        with open(cache_file, "r") as f:
+        with open(cache_file_path, "r", encoding="utf-8") as f:
             cache_data = json.load(f)
+
+        metadata = cache_data.get("metadata")
         if (
             not isinstance(cache_data, dict)
             or "average" not in cache_data
-            or "per_image" not in cache_data
-            or "metadata" not in cache_data
-            or cache_data.get("metadata", {}).get("cache_version") != CACHE_VERSION
+            or not isinstance(metadata, dict)
+            or metadata.get("cache_version") != expected_cache_version
         ):
-            print(f"Cache file {cache_file} format invalid or version mismatch. Recalculating.")
             return None
-        if gt_mtime_current and cache_data["metadata"].get("gt_mtime") != gt_mtime_current:
-            print(f"Ground truth mtime changed for {cache_file.name}. Recalculating.")
+
+        if gt_mtime_current and metadata.get("gt_mtime") != gt_mtime_current:
             return None
-        if mask_mtime_current and cache_data["metadata"].get("mask_mtime") != mask_mtime_current:
-            print(f"Mask mtime changed for {cache_file.name}. Recalculating.")
+        if (
+            mask_mtime_current and metadata.get("mask_mtime") != mask_mtime_current
+        ):  # Mask is critical
             return None
-        print(f"Cache hit for {cache_file.name}")
+
+        if cache_data.get("average") is None:
+            return None
+
         return cache_data
-    except (json.JSONDecodeError, KeyError, Exception) as e:
-        print(f"Error loading cache file {cache_file}: {e}. Recalculating.")
+    except (json.JSONDecodeError, KeyError, OSError):
         return None
 
 
-def save_cache(cache_file, data, gt_mtime, mask_mtime):
-    try:
-        cache_file.parent.mkdir(parents=True, exist_ok=True)
-        data["metadata"] = {
-            "timestamp": time.time(),
-            "gt_mtime": gt_mtime,
-            "mask_mtime": mask_mtime,
-            "cache_version": CACHE_VERSION,
-        }
-        with open(cache_file, "w") as f:
-            json.dump(data, f, indent=4)
-    except Exception as e:
-        print(f"Error saving cache to {cache_file}: {e}")
-
-
-# --- Main Function ---
-def calculate_scene_ssim(
-    gt_path_str,
-    mask_path_str,
-    results_dir_str,
-    cache_dir_str,
-    num_images=DEFAULT_NUM_IMAGES,
-    target_size=TARGET_SIZE,
-):
-    """
-    Calculates the average masked SSIM for a given scene.
-
-    Args:
-        gt_path_str (str): Path to the ground truth image.
-        mask_path_str (str): Path to the mask image.
-        results_dir_str (str): Path to the directory containing result images.
-        cache_dir_str (str): Path to the base directory for caching.
-        num_images (int): Number of result images to process.
-        target_size (tuple): Target (width, height) for resizing, or None.
-
-    Returns:
-        float: The average masked SSIM score (higher is better, 0-1), or None on error.
-    """
-    gt_path = Path(gt_path_str)
-    mask_path = Path(mask_path_str)
-    results_dir = Path(results_dir_str)
-    cache_dir = Path(cache_dir_str)
-
-    if not gt_path.is_file():
-        print(f"Error: Ground truth image not found at {gt_path}")
-        return None
-    if not mask_path.is_file():
-        print(f"Error: Mask image not found at {mask_path}")
-        return None
-    if not results_dir.is_dir():
-        print(f"Error: Results directory not found at {results_dir}")
-        return None
-
-    results_dir_name = results_dir.name
-    cache_file = get_cache_path(cache_dir, results_dir_name)
-
-    # --- Load GT and Mask (Load once) ---
-    try:
-        gt_image = cv2.imread(str(gt_path))
-        mask_image = cv2.imread(str(mask_path), cv2.IMREAD_GRAYSCALE)
-        if gt_image is None:
-            print(f"Error: Failed to load ground truth image: {gt_path}")
-            return None
-        if mask_image is None:
-            print(f"Error: Failed to load mask image: {mask_path}")
-            return None
-
-        if target_size:
-            gt_image = cv2.resize(gt_image, target_size, interpolation=cv2.INTER_LINEAR)
-            mask_image = cv2.resize(mask_image, target_size, interpolation=cv2.INTER_NEAREST)
-
-    except Exception as e:
-        print(f"Error loading/resizing GT or Mask: {e}")
-        return None
-
-    # --- Cache Check ---
-    gt_mtime = get_modification_time(gt_path)
-    mask_mtime = get_modification_time(mask_path)
-    cached_results = load_cache(cache_file, gt_mtime, mask_mtime)
-    if cached_results:
-        return cached_results.get("average")
-
-    # --- Calculation ---
-    print(f"Calculating Masked SSIM for scene: {results_dir_name}")
-    total_ssim = 0.0
-    valid_image_count = 0
-    per_image_scores = {}
-
-    image_files = sorted(
-        [p for p in results_dir.glob("*.png") if p.stem.isdigit()], key=lambda x: int(x.stem)
-    )
-    image_files = image_files[:num_images]
-
-    if not image_files:
-        print(f"Warning: No valid result images (0..{num_images-1}.png) found in {results_dir}")
-        return 0.0  # SSIM defaults to 0 if no images
-
-    for i in tqdm(range(num_images), desc=f"SSIM Processing {results_dir_name}", leave=False):
-        result_img_name = f"{i}.png"
-        result_img_path = results_dir / result_img_name
-
-        if result_img_path.is_file():
-            try:
-                gen_image = cv2.imread(str(result_img_path))
-                if gen_image is None:
-                    print(f"Warning: Failed to load generated image {result_img_name}. Skipping.")
-                    per_image_scores[result_img_name] = None
-                    continue
-
-                if target_size:
-                    if gen_image.shape[:2] != target_size[::-1]:
-                        gen_image = cv2.resize(
-                            gen_image, target_size, interpolation=cv2.INTER_LINEAR
-                        )
-
-                ssim_value = calculate_ssim_masked(gt_image, gen_image, mask_image)
-
-                if ssim_value is not None:
-                    total_ssim += ssim_value
-                    per_image_scores[result_img_name] = ssim_value
-                    valid_image_count += 1
-                else:
-                    per_image_scores[result_img_name] = None  # Mark error
-                    # print(f"Skipping SSIM for {result_img_name} due to calculation error.")
-
-            except Exception as e:
-                print(f"Error processing image {result_img_name} for SSIM: {e}")
-                per_image_scores[result_img_name] = None
-        # else:
-        #     print(f"Warning: Result image {result_img_name} not found.")
-        #     per_image_scores[result_img_name] = None
-
-    if valid_image_count == 0:
-        print(f"Error: No valid result images processed for Masked SSIM in {results_dir}")
-        return None
-
-    average_ssim = total_ssim / valid_image_count
-
-    # --- Save to Cache ---
-    cache_data = {
-        "average": average_ssim,
-        "per_image": per_image_scores,
-        "count": valid_image_count,
-    }
-    save_cache(cache_file, cache_data, gt_mtime, mask_mtime)
-
-    return average_ssim
-
-
-# --- Command Line Interface ---
+# --- Main execution block ---
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(
-        description="Calculate Masked SSIM for a RealFill result scene."
-    )
+    parser = argparse.ArgumentParser(description="Calculate Masked SSIM with early cache exit.")
     parser.add_argument(
         "--gt_path", type=str, required=True, help="Path to the ground truth image."
     )
@@ -322,30 +95,220 @@ if __name__ == "__main__":
         default=DEFAULT_NUM_IMAGES,
         help=f"Number of result images per scene (default: {DEFAULT_NUM_IMAGES}).",
     )
-    # Add args for resizing control if needed
-
     args = parser.parse_args()
 
-    current_target_size = TARGET_SIZE
-    # Update current_target_size based on args if resizing control is added
+    current_results_dir_name = Path(args.results_dir).name
+    cache_file = get_cache_path_light(args.cache_dir, current_results_dir_name, METRIC_NAME)
+    current_gt_mtime = get_modification_time_light(args.gt_path)
+    current_mask_mtime = get_modification_time_light(args.mask_path)
 
-    # Ensure cache subdirectories exist
-    ssim_cache_dir = Path(args.cache_dir) / "per_scene_cache" / "ssim_masked"
-    ssim_cache_dir.mkdir(parents=True, exist_ok=True)
+    cached_data = load_cache_light(cache_file, current_gt_mtime, current_mask_mtime, CACHE_VERSION)
 
-    avg_score = calculate_scene_ssim(
-        args.gt_path,
-        args.mask_path,
-        args.results_dir,
-        args.cache_dir,
-        args.num_images,
-        target_size=current_target_size,
-    )
+    if cached_data:
+        cached_avg_score = cached_data.get("average")
+        if cached_avg_score is not None:
+            print(f"FINAL_SCORE:{cached_avg_score:.8f}")
+            sys.exit(0)
 
-    # Remember: Higher SSIM is better (0 to 1)
-    if avg_score is not None:
-        print(f"\nAverage Masked SSIM for {Path(args.results_dir).name}: {avg_score:.4f}")
-        print(f"FINAL_SCORE:{avg_score:.8f}")
+    try:
+        import cv2
+        import numpy as np
+        from tqdm import tqdm
+    except ImportError as e:
+        print(f"Error: Missing heavy libraries for SSIM calculation (cv2, numpy): {e}")
+        print("FINAL_SCORE:ERROR")
+        sys.exit(1)
+
+    # --- Heavy Path Helper Functions ---
+
+    def ssim_single_channel_heavy(
+        img1_ch_np: np.ndarray,
+        img2_ch_np: np.ndarray,
+        mask_np: np.ndarray,
+        C1=(0.01 * 255) ** 2,
+        C2=(0.03 * 255) ** 2,
+    ) -> float | None:
+        """Calculates SSIM for a single channel, masked."""
+        img1_ch_np = img1_ch_np.astype(np.float64)
+        img2_ch_np = img2_ch_np.astype(np.float64)
+        mask_bool = mask_np > 0
+
+        if not np.any(mask_bool):
+            return 0.0
+
+        kernel_size = 11
+        sigma = 1.5
+        window = cv2.getGaussianKernel(kernel_size, sigma)
+        window = np.outer(window, window.transpose())
+
+        mu1 = cv2.filter2D(img1_ch_np, -1, window, borderType=cv2.BORDER_REPLICATE)
+        mu2 = cv2.filter2D(img2_ch_np, -1, window, borderType=cv2.BORDER_REPLICATE)
+        mu1_sq, mu2_sq, mu1_mu2 = mu1**2, mu2**2, mu1 * mu2
+        sigma1_sq = (
+            cv2.filter2D(img1_ch_np**2, -1, window, borderType=cv2.BORDER_REPLICATE) - mu1_sq
+        )
+        sigma2_sq = (
+            cv2.filter2D(img2_ch_np**2, -1, window, borderType=cv2.BORDER_REPLICATE) - mu2_sq
+        )
+        sigma12 = (
+            cv2.filter2D(img1_ch_np * img2_ch_np, -1, window, borderType=cv2.BORDER_REPLICATE)
+            - mu1_mu2
+        )
+
+        sigma1_sq = np.maximum(0.0, sigma1_sq)
+        sigma2_sq = np.maximum(0.0, sigma2_sq)
+
+        numerator = (2 * mu1_mu2 + C1) * (2 * sigma12 + C2)
+        denominator = (mu1_sq + mu2_sq + C1) * (sigma1_sq + sigma2_sq + C2)
+        ssim_map = numerator / denominator
+
+        ssim_masked_values = ssim_map[mask_bool]
+        if ssim_masked_values.size == 0:
+            return 0.0
+
+        mean_ssim = np.mean(ssim_masked_values)
+        return np.clip(mean_ssim, 0.0, 1.0)
+
+    def calculate_ssim_masked_heavy(
+        img1_color_np: np.ndarray, img2_color_np: np.ndarray, mask_np: np.ndarray
+    ) -> float | None:
+        """Calculates average SSIM over color channels for the masked region."""
+        if (
+            img1_color_np.shape != img2_color_np.shape
+            or img1_color_np.shape[:2] != mask_np.shape[:2]
+        ):
+            return None
+
+        if img1_color_np.ndim == 2:  # Grayscale
+            return ssim_single_channel_heavy(img1_color_np, img2_color_np, mask_np)
+        elif img1_color_np.ndim == 3 and img1_color_np.shape[2] == 3:  # Color
+            ssims = []
+            for i in range(3):  # B, G, R channels
+                channel_ssim = ssim_single_channel_heavy(
+                    img1_color_np[:, :, i], img2_color_np[:, :, i], mask_np
+                )
+                if channel_ssim is None:
+                    return None  # Propagate error
+                ssims.append(channel_ssim)
+            return np.mean(ssims) if ssims else None
+        return None
+
+    def save_cache_heavy(
+        cache_file_path: Path,
+        data_to_save: dict,
+        gt_mtime: float,
+        mask_mtime: float,
+        current_cache_version: str,
+    ):
+        try:
+            cache_file_path.parent.mkdir(parents=True, exist_ok=True)
+            data_to_save["metadata"] = {
+                "timestamp": time.time(),
+                "gt_mtime": gt_mtime,
+                "mask_mtime": mask_mtime,
+                "cache_version": current_cache_version,
+            }
+            with open(cache_file_path, "w", encoding="utf-8") as f:
+                json.dump(data_to_save, f, indent=4)
+        except Exception as e_save:
+            print(f"Error saving SSIM cache (heavy path) to {cache_file_path}: {e_save}")
+
+    # --- Main Calculation Logic (Heavy Path) ---
+    final_average_score = None
+    try:
+        gt_image_raw = cv2.imread(args.gt_path)  # BGR
+        mask_image_raw = cv2.imread(args.mask_path, cv2.IMREAD_GRAYSCALE)
+        if gt_image_raw is None or mask_image_raw is None:
+            print(
+                f"Error loading GT/Mask for SSIM (heavy path). GT: {args.gt_path}, Mask: {args.mask_path}"
+            )
+            print("FINAL_SCORE:ERROR")
+            sys.exit(1)
+
+        gt_image_processed = cv2.resize(
+            gt_image_raw, SSIM_TARGET_SIZE, interpolation=cv2.INTER_LINEAR
+        )
+        mask_image_processed = cv2.resize(
+            mask_image_raw, SSIM_TARGET_SIZE, interpolation=cv2.INTER_NEAREST
+        )
+    except Exception as e_prep:
+        print(f"Error during GT/Mask preparation for SSIM (heavy path): {e_prep}")
+        print("FINAL_SCORE:ERROR")
+        sys.exit(1)
+
+    results_dir_obj = Path(args.results_dir)
+    total_ssim_val = 0.0
+    valid_image_count_val = 0
+    per_image_scores_dict = {}
+
+    image_paths_to_process = []
+    for i in range(args.num_images):
+        img_p = results_dir_obj / f"{i}.png"
+        if img_p.is_file():
+            image_paths_to_process.append(img_p)
+        else:
+            per_image_scores_dict[f"{i}.png"] = None
+
+    if not image_paths_to_process and args.num_images > 0:
+        save_cache_heavy(
+            cache_file,
+            {"average": None, "per_image": per_image_scores_dict, "count": 0},
+            current_gt_mtime,
+            current_mask_mtime,
+            CACHE_VERSION,
+        )
+        print("FINAL_SCORE:ERROR")  # Or 0.0
+        sys.exit(0)
+
+    for result_img_path_obj in tqdm(
+        image_paths_to_process,
+        desc=f"SSIM Processing {current_results_dir_name}",
+        leave=False,
+        disable=not sys.stdout.isatty(),
+    ):
+        try:
+            gen_image_raw = cv2.imread(str(result_img_path_obj))  # BGR
+            if gen_image_raw is None:
+                per_image_scores_dict[result_img_path_obj.name] = None
+                continue
+
+            gen_image_processed = cv2.resize(
+                gen_image_raw, SSIM_TARGET_SIZE, interpolation=cv2.INTER_LINEAR
+            )
+            ssim_value = calculate_ssim_masked_heavy(
+                gt_image_processed, gen_image_processed, mask_image_processed
+            )
+
+            if ssim_value is not None:
+                total_ssim_val += ssim_value
+                per_image_scores_dict[result_img_path_obj.name] = ssim_value
+                valid_image_count_val += 1
+            else:
+                per_image_scores_dict[result_img_path_obj.name] = None
+        except Exception:
+            per_image_scores_dict[result_img_path_obj.name] = None
+
+    if valid_image_count_val > 0:
+        final_average_score = total_ssim_val / valid_image_count_val
+        cache_data_to_save = {
+            "average": final_average_score,
+            "per_image": per_image_scores_dict,
+            "count": valid_image_count_val,
+        }
+        save_cache_heavy(
+            cache_file, cache_data_to_save, current_gt_mtime, current_mask_mtime, CACHE_VERSION
+        )
     else:
-        print(f"\nFailed to calculate Masked SSIM for {Path(args.results_dir).name}")
+        save_cache_heavy(
+            cache_file,
+            {"average": None, "per_image": per_image_scores_dict, "count": 0},
+            current_gt_mtime,
+            current_mask_mtime,
+            CACHE_VERSION,
+        )
+
+    if final_average_score is not None:
+        # Higher SSIM is better (0 to 1).
+        print(f"FINAL_SCORE:{final_average_score:.8f}")
+    else:
         print("FINAL_SCORE:ERROR")

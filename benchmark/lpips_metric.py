@@ -1,366 +1,77 @@
 # benchmark/lpips_metric.py
 
-import cv2
-import numpy as np
-import torch
-import torchvision.transforms as transforms
+# --- Lightweight Imports First ---
 import argparse
 import json
 import os
-from pathlib import Path
-from tqdm import tqdm
+import sys
 import time
-import traceback  # Added for better error logging
+import traceback
+from pathlib import Path
 
-# Attempt LPIPS import
-try:
-    import lpips
-
-    lpips_available = True
-except ImportError:
-    print("Error: lpips library not found. Please install it: pip install lpips")
-    lpips = None
-    lpips_available = False
-
-
-# --- Constants ---
+# --- Constants (Lightweight) ---
 DEFAULT_NUM_IMAGES = 16
 CACHE_VERSION = "1.0"
-TARGET_SIZE = (512, 512)  # Resize dimension used in the original script
-LPIPS_NET = "alex"  # Or 'vgg'
+METRIC_NAME = "lpips_masked"  # Explicitly denote that it's masked
+LPIPS_NET_TYPE = "alex"  # Or "vgg", affects model loaded and potentially results
 
-# --- Model Variables (Initialize to None) ---
-loss_fn_lpips = None
-device = None
-model_loaded = False  # Flag to track loading state
-
-# --- Transforms (Define globally) ---
-# Converts numpy HWC [0,255] to torch CHW [0,1]
-img_to_tensor = transforms.ToTensor()
+# --- Lightweight Helper Functions for Cache Handling ---
 
 
-def normalize_tensor(tensor):
-    """Normalizes a tensor from [0,1] to [-1,1] as expected by LPIPS."""
-    return tensor * 2.0 - 1.0
-
-
-# --- Helper Functions ---
-
-
-def _load_model_if_needed():
-    """Loads the LPIPS model once, only when needed."""
-    global loss_fn_lpips, device, model_loaded, lpips_available
-    if model_loaded:
-        return True  # Already loaded successfully
-
-    if not lpips_available:
-        print("LPIPS library not available, cannot load model.")
-        return False
-
-    if loss_fn_lpips is not None and device is not None:
-        model_loaded = True  # Already loaded
-        return True
-
-    print(f"Attempting to load LPIPS model (net={LPIPS_NET})...")
-    try:
-        # Initialize LPIPS model
-        _loss_fn_lpips = lpips.LPIPS(net=LPIPS_NET)  # Use AlexNet by default
-        _device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        _loss_fn_lpips.to(_device)
-        _loss_fn_lpips.eval()  # Set to evaluation mode
-
-        # Assign to global variables only after successful loading
-        loss_fn_lpips = _loss_fn_lpips
-        device = _device
-        model_loaded = True
-        print(f"LPIPS model loaded successfully on {device}.")
-        return True
-    except Exception as e:
-        print(f"FATAL Error loading LPIPS model: {e}")
-        traceback.print_exc()
-        # Ensure globals remain None on failure
-        loss_fn_lpips = None
-        device = None
-        model_loaded = False
-        return False
-
-
-def get_modification_time(file_path):
-    """Gets the modification time of a file."""
-    try:
-        return os.path.getmtime(file_path)
-    except OSError:
-        return 0
-
-
-@torch.no_grad()  # Essential for inference
-def calculate_lpips_masked(gt_tensor_norm, gen_tensor_norm, mask_tensor, model, device):
-    """
-    Calculates LPIPS distance focused on the masked regions.
-    Assumes input tensors are normalized to [-1, 1] and have batch dim [1, C, H, W].
-    Mask tensor is [1, 1, H, W] with values in [0, 1].
-    """
-    # Safeguard checks
-    if not model or not device:
-        print("LPIPS model or device not available during distance calculation.")
-        return None
-
-    if (
-        gt_tensor_norm.shape != gen_tensor_norm.shape
-        or gt_tensor_norm.shape[2:] != mask_tensor.shape[2:]
-    ):
-        print("Warning: Tensor shape mismatch. Skipping LPIPS calculation.")
-        return None
-
-    mask_tensor = mask_tensor.to(device)
-    masked_gt = gt_tensor_norm * mask_tensor
-    masked_gen = gen_tensor_norm * mask_tensor
-
-    try:
-        distance = model(masked_gt, masked_gen)
-        return distance.item()
-    except Exception as e:
-        print(f"Error during LPIPS forward pass: {e}")
-        # traceback.print_exc() # Optional
-        return None
-
-
-def get_cache_path(cache_dir, results_dir_name):
-    """Constructs the path for the cache file."""
+def get_cache_path_light(
+    cache_dir_str: str, results_dir_name_str: str, metric_name_str: str
+) -> Path:
     return (
-        Path(cache_dir) / "per_scene_cache" / "lpips_masked" / f"{results_dir_name}.json"
-    )  # Use _masked suffix
+        Path(cache_dir_str) / "per_scene_cache" / metric_name_str / f"{results_dir_name_str}.json"
+    )
 
 
-def load_cache(cache_file, gt_mtime_current, mask_mtime_current):
-    """Loads results from cache if valid."""
-    if not cache_file.exists():
-        return None
-
+def get_modification_time_light(file_path_str: str) -> float:
     try:
-        with open(cache_file, "r") as f:
+        return os.path.getmtime(file_path_str)
+    except OSError:
+        return 0.0
+
+
+def load_cache_light(
+    cache_file_path: Path,
+    gt_mtime_current: float,
+    mask_mtime_current: float,
+    expected_cache_version: str,
+) -> dict | None:
+    if not cache_file_path.is_file():
+        return None
+    try:
+        with open(cache_file_path, "r", encoding="utf-8") as f:
             cache_data = json.load(f)
 
-        # Validation
+        metadata = cache_data.get("metadata")
         if (
             not isinstance(cache_data, dict)
             or "average" not in cache_data
-            or "per_image" not in cache_data
-            or "metadata" not in cache_data
-            or cache_data.get("metadata", {}).get("cache_version") != CACHE_VERSION
+            or not isinstance(metadata, dict)
+            or metadata.get("cache_version") != expected_cache_version
         ):
-            print(f"Cache file {cache_file} format invalid or version mismatch. Recalculating.")
             return None
 
-        # Check modification times - Mask is CRITICAL
-        if gt_mtime_current and cache_data["metadata"].get("gt_mtime") != gt_mtime_current:
-            print(f"Ground truth mtime changed for {cache_file.name}. Recalculating.")
+        if gt_mtime_current and metadata.get("gt_mtime") != gt_mtime_current:
             return None
-        if mask_mtime_current and cache_data["metadata"].get("mask_mtime") != mask_mtime_current:
-            print(f"Mask mtime changed for {cache_file.name}. Recalculating.")
+        # Mask mtime IS critical for masked LPIPS
+        if mask_mtime_current and metadata.get("mask_mtime") != mask_mtime_current:
             return None
 
-        # print(f"Cache hit for {cache_file.name}") # Moved to main function
+        if cache_data.get("average") is None:
+            return None
+
         return cache_data
-    except (json.JSONDecodeError, KeyError, Exception) as e:
-        print(f"Error loading cache file {cache_file}: {e}. Recalculating.")
+    except (json.JSONDecodeError, KeyError, OSError):
         return None
 
 
-def save_cache(cache_file, data, gt_mtime, mask_mtime):
-    """Saves results to the cache file."""
-    try:
-        cache_file.parent.mkdir(parents=True, exist_ok=True)
-        data["metadata"] = {
-            "timestamp": time.time(),
-            "gt_mtime": gt_mtime,
-            "mask_mtime": mask_mtime,  # Save mask mtime
-            "cache_version": CACHE_VERSION,
-        }
-        with open(cache_file, "w") as f:
-            json.dump(data, f, indent=4)
-        # print(f"Saved cache to {cache_file}")
-    except Exception as e:
-        print(f"Error saving cache to {cache_file}: {e}")
-
-
-# --- Main Function ---
-def calculate_scene_lpips(
-    gt_path_str,
-    mask_path_str,
-    results_dir_str,
-    cache_dir_str,
-    num_images=DEFAULT_NUM_IMAGES,
-    target_size=TARGET_SIZE,
-):
-    """
-    Calculates the average masked LPIPS distance for a given scene.
-    Loads the model only if needed.
-    """
-    gt_path = Path(gt_path_str)
-    mask_path = Path(mask_path_str)
-    results_dir = Path(results_dir_str)
-    cache_dir = Path(cache_dir_str)
-
-    # --- Input Validation ---
-    if not gt_path.is_file():
-        print(f"Error: Ground truth image not found at {gt_path}")
-        return None
-    if not mask_path.is_file():
-        print(f"Error: Mask image not found at {mask_path}")
-        return None
-    if not results_dir.is_dir():
-        print(f"Error: Results directory not found at {results_dir}")
-        return None
-
-    results_dir_name = results_dir.name
-    cache_file = get_cache_path(cache_dir, results_dir_name)
-
-    # --- Load GT and Mask, Preprocess (Do this before cache check for mtime) ---
-    try:
-        gt_image_bgr = cv2.imread(str(gt_path))
-        mask_image_gray = cv2.imread(str(mask_path), cv2.IMREAD_GRAYSCALE)
-        if gt_image_bgr is None:
-            print(f"Error: Failed to load ground truth image: {gt_path}")
-            return None
-        if mask_image_gray is None:
-            print(f"Error: Failed to load mask image: {mask_path}")
-            return None
-
-        gt_image_rgb = cv2.cvtColor(gt_image_bgr, cv2.COLOR_BGR2RGB)
-
-        if target_size:
-            gt_image_rgb = cv2.resize(gt_image_rgb, target_size, interpolation=cv2.INTER_LINEAR)
-            mask_image_gray = cv2.resize(
-                mask_image_gray, target_size, interpolation=cv2.INTER_NEAREST
-            )
-
-        # Tensors are needed for calculation, but can be created later if needed
-        # We only need paths and mtimes for cache check initially
-
-    except Exception as e:
-        print(f"Error loading/preprocessing GT or Mask base images: {e}")
-        return None
-
-    # --- Cache Check ---
-    gt_mtime = get_modification_time(gt_path)
-    mask_mtime = get_modification_time(mask_path)
-    cached_results = load_cache(cache_file, gt_mtime, mask_mtime)
-    if cached_results:
-        print(f"Cache hit for {results_dir_name}")
-        return cached_results.get("average")
-
-    # --- Model Loading (Only if needed) ---
-    if not _load_model_if_needed():
-        print("Error: Failed to load LPIPS model or library unavailable. Cannot proceed.")
-        return None
-
-    # --- Prepare Tensors (Now that we know we need them) ---
-    try:
-        # Convert GT to tensors and normalize
-        gt_tensor = img_to_tensor(gt_image_rgb)  # [C, H, W], [0, 1]
-        # Ensure device is valid before using .to(device)
-        if device is None:
-            print("Error: LPIPS device is None after model loading attempt.")
-            return None
-        gt_tensor_norm = (
-            normalize_tensor(gt_tensor).unsqueeze(0).to(device)
-        )  # [1, C, H, W], [-1, 1]
-
-        # Convert mask to tensor [1, 1, H, W], [0, 1]
-        mask_tensor = (
-            img_to_tensor(mask_image_gray.astype(np.float32) / 255.0).unsqueeze(0).to(device)
-        )
-        mask_tensor = (mask_tensor > 0.5).float()
-    except Exception as e:
-        print(f"Error creating tensors from GT/Mask: {e}")
-        return None
-
-    # --- Calculation ---
-    print(f"Calculating Masked LPIPS for scene: {results_dir_name}")
-    total_lpips = 0.0
-    valid_image_count = 0
-    per_image_scores = {}
-
-    image_files = sorted(
-        [p for p in results_dir.glob("*.png") if p.stem.isdigit()], key=lambda x: int(x.stem)
-    )
-    image_files = image_files[:num_images]
-
-    if not image_files:
-        print(f"Warning: No valid result images (0..{num_images-1}.png) found in {results_dir}")
-        save_cache(cache_file, {"average": None, "per_image": {}, "count": 0}, gt_mtime, mask_mtime)
-        return None  # Return None as 0.0 is a valid LPIPS score
-
-    # Pass loaded model and device to helper
-    for i in tqdm(range(num_images), desc=f"LPIPS Processing {results_dir_name}", leave=False):
-        result_img_name = f"{i}.png"
-        result_img_path = results_dir / result_img_name
-
-        if result_img_path.is_file():
-            try:
-                gen_image_bgr = cv2.imread(str(result_img_path))
-                if gen_image_bgr is None:
-                    print(f"Warning: Failed to load generated image {result_img_name}. Skipping.")
-                    per_image_scores[result_img_name] = None
-                    continue
-
-                gen_image_rgb = cv2.cvtColor(gen_image_bgr, cv2.COLOR_BGR2RGB)
-
-                if target_size:
-                    if gen_image_rgb.shape[:2] != target_size[::-1]:
-                        gen_image_rgb = cv2.resize(
-                            gen_image_rgb, target_size, interpolation=cv2.INTER_LINEAR
-                        )
-
-                gen_tensor = img_to_tensor(gen_image_rgb)
-                gen_tensor_norm = normalize_tensor(gen_tensor).unsqueeze(0).to(device)
-
-                lpips_value = calculate_lpips_masked(
-                    gt_tensor_norm, gen_tensor_norm, mask_tensor, loss_fn_lpips, device
-                )
-
-                if lpips_value is not None:
-                    total_lpips += lpips_value
-                    per_image_scores[result_img_name] = lpips_value
-                    valid_image_count += 1
-                else:
-                    per_image_scores[result_img_name] = None  # Mark error
-
-            except Exception as e:
-                print(f"Error processing image {result_img_name} for LPIPS: {e}")
-                per_image_scores[result_img_name] = None
-        else:
-            # print(f"Warning: Result image {result_img_name} not found.")
-            per_image_scores[result_img_name] = None
-
-    if valid_image_count == 0:
-        print(f"Error: No valid result images processed for Masked LPIPS in {results_dir}")
-        save_cache(
-            cache_file,
-            {"average": None, "per_image": per_image_scores, "count": 0},
-            gt_mtime,
-            mask_mtime,
-        )
-        return None
-
-    average_lpips = total_lpips / valid_image_count
-
-    # --- Save to Cache ---
-    cache_data = {
-        "average": average_lpips,
-        "per_image": per_image_scores,
-        "count": valid_image_count,
-    }
-    save_cache(cache_file, cache_data, gt_mtime, mask_mtime)
-
-    return average_lpips
-
-
-# --- Command Line Interface ---
+# --- Main execution block ---
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="Calculate Masked LPIPS distance for a RealFill result scene."
+        description="Calculate Masked LPIPS distance with early cache exit."
     )
     parser.add_argument(
         "--gt_path", type=str, required=True, help="Path to the ground truth image."
@@ -384,36 +95,235 @@ if __name__ == "__main__":
         default=DEFAULT_NUM_IMAGES,
         help=f"Number of result images per scene (default: {DEFAULT_NUM_IMAGES}).",
     )
-
+    # TARGET_SIZE is fixed for LPIPS internal processing via OpenCV, not a CLI arg for this script version
     args = parser.parse_args()
 
-    if not lpips_available:
-        print("Exiting because LPIPS library is not installed.")
+    current_results_dir_name = Path(args.results_dir).name
+    cache_file = get_cache_path_light(args.cache_dir, current_results_dir_name, METRIC_NAME)
+    current_gt_mtime = get_modification_time_light(args.gt_path)
+    current_mask_mtime = get_modification_time_light(args.mask_path)
+
+    cached_data = load_cache_light(cache_file, current_gt_mtime, current_mask_mtime, CACHE_VERSION)
+
+    if cached_data:
+        cached_avg_score = cached_data.get("average")
+        if cached_avg_score is not None:
+            print(f"FINAL_SCORE:{cached_avg_score:.8f}")
+            sys.exit(0)
+
+    try:
+        import cv2
+        import numpy as np
+        import torch
+        import torchvision.transforms as T_vision  # Alias for torchvision.transforms
+        from tqdm import tqdm
+
+        try:
+            import lpips
+
+            lpips_library_available = True
+        except ImportError:
+            print("Error: lpips library not found. Please install it: pip install lpips")
+            lpips_library_available = False
+            lpips = None
+            print("FINAL_SCORE:ERROR")
+            sys.exit(1)
+    except ImportError as e:
+        print(f"Error: Missing general heavy libraries for LPIPS calculation: {e}")
         print("FINAL_SCORE:ERROR")
-        exit(1)
+        sys.exit(1)
 
-    current_target_size = TARGET_SIZE
+    # --- Global Variables for Model (Heavy Path) ---
+    heavy_loss_fn_lpips = None
+    heavy_device = None
+    heavy_model_loaded = False
+    # Fixed target size for LPIPS preprocessing
+    LPIPS_TARGET_SIZE = (512, 512)
 
-    # Ensure cache subdirectories exist
-    lpips_cache_dir = Path(args.cache_dir) / "per_scene_cache" / "lpips_masked"
-    lpips_cache_dir.mkdir(parents=True, exist_ok=True)
+    def _load_model_if_needed_heavy():
+        global heavy_loss_fn_lpips, heavy_device, heavy_model_loaded, lpips_library_available
+        if heavy_model_loaded:
+            return True
+        if not lpips_library_available or lpips is None:
+            return False
+        try:
+            heavy_device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+            heavy_loss_fn_lpips = lpips.LPIPS(net=LPIPS_NET_TYPE).to(heavy_device).eval()
+            heavy_model_loaded = True
+            return True
+        except Exception as e_load:
+            print(f"FATAL Error loading LPIPS model (heavy path): {e_load}")
+            traceback.print_exc()
+            heavy_loss_fn_lpips, heavy_device, heavy_model_loaded = None, None, False
+            return False
 
-    # calculate_scene_lpips handles model loading internally
-    avg_score = calculate_scene_lpips(
-        args.gt_path,
-        args.mask_path,
-        args.results_dir,
-        args.cache_dir,
-        args.num_images,
-        target_size=current_target_size,
-    )
+    # Preprocessing functions for heavy path
+    img_to_tensor_heavy = T_vision.ToTensor()  # HWC uint8 [0,255] -> CHW float [0,1]
 
-    # Remember: Lower LPIPS is better
-    if avg_score is not None:
-        print(
-            f"\nAverage Masked LPIPS ({LPIPS_NET}) for {Path(args.results_dir).name}: {avg_score:.4f}"
+    def normalize_tensor_heavy(tensor_chw_float_01: torch.Tensor) -> torch.Tensor:
+        """Normalizes a CHW tensor from [0,1] to [-1,1] as expected by LPIPS."""
+        return tensor_chw_float_01 * 2.0 - 1.0
+
+    @torch.no_grad()
+    def calculate_lpips_masked_heavy(
+        gt_tensor_norm_bchw: torch.Tensor,
+        gen_tensor_norm_bchw: torch.Tensor,
+        mask_tensor_b1hw: torch.Tensor,
+    ) -> float | None:
+        if not heavy_model_loaded:
+            return None
+        try:
+            # Mask tensors should be on the same device
+            masked_gt = gt_tensor_norm_bchw * mask_tensor_b1hw.to(heavy_device)
+            masked_gen = gen_tensor_norm_bchw * mask_tensor_b1hw.to(heavy_device)
+            distance = heavy_loss_fn_lpips(masked_gt, masked_gen)
+            return distance.item()
+        except Exception:
+            return None
+
+    def save_cache_heavy(
+        cache_file_path: Path,
+        data_to_save: dict,
+        gt_mtime: float,
+        mask_mtime: float,
+        current_cache_version: str,
+    ):
+        try:
+            cache_file_path.parent.mkdir(parents=True, exist_ok=True)
+            data_to_save["metadata"] = {
+                "timestamp": time.time(),
+                "gt_mtime": gt_mtime,
+                "mask_mtime": mask_mtime,
+                "cache_version": current_cache_version,
+            }
+            with open(cache_file_path, "w", encoding="utf-8") as f:
+                json.dump(data_to_save, f, indent=4)
+        except Exception as e_save:
+            print(f"Error saving cache (heavy path) to {cache_file_path}: {e_save}")
+
+    # --- Main Calculation Logic (Heavy Path) ---
+    final_average_score = None
+    if not _load_model_if_needed_heavy():
+        print("Error: Failed to load LPIPS model (heavy path). Cannot proceed.")
+        print("FINAL_SCORE:ERROR")
+        sys.exit(1)
+
+    try:
+        # Load GT and Mask images (once for the scene)
+        gt_image_bgr = cv2.imread(args.gt_path)
+        mask_image_gray = cv2.imread(args.mask_path, cv2.IMREAD_GRAYSCALE)
+        if gt_image_bgr is None or mask_image_gray is None:
+            print(
+                f"Error loading GT/Mask for LPIPS (heavy path). GT: {args.gt_path}, Mask: {args.mask_path}"
+            )
+            print("FINAL_SCORE:ERROR")
+            sys.exit(1)
+
+        gt_image_rgb = cv2.cvtColor(gt_image_bgr, cv2.COLOR_BGR2RGB)
+
+        # Resize GT and Mask
+        gt_image_resized_rgb = cv2.resize(
+            gt_image_rgb, LPIPS_TARGET_SIZE, interpolation=cv2.INTER_LINEAR
         )
-        print(f"FINAL_SCORE:{avg_score:.8f}")
+        mask_image_resized_gray = cv2.resize(
+            mask_image_gray, LPIPS_TARGET_SIZE, interpolation=cv2.INTER_NEAREST
+        )
+
+        # Convert GT to normalized tensor [1, C, H, W], range [-1, 1]
+        gt_tensor_chw_01 = img_to_tensor_heavy(gt_image_resized_rgb)
+        gt_tensor_norm_bchw = normalize_tensor_heavy(gt_tensor_chw_01).unsqueeze(0).to(heavy_device)
+
+        # Convert Mask to tensor [1, 1, H, W], range [0, 1] (binary)
+        mask_tensor_1hw_01 = img_to_tensor_heavy(mask_image_resized_gray.astype(np.float32) / 255.0)
+        mask_tensor_b1hw = (
+            (mask_tensor_1hw_01 > 0.5).float().unsqueeze(0).to(heavy_device)
+        )  # Ensure it's binary and on device
+
+    except Exception as e_prep:
+        print(f"Error during GT/Mask preparation for LPIPS (heavy path): {e_prep}")
+        print("FINAL_SCORE:ERROR")
+        sys.exit(1)
+
+    results_dir_obj = Path(args.results_dir)
+    total_lpips_val = 0.0
+    valid_image_count_val = 0
+    per_image_scores_dict = {}
+
+    image_paths_to_process = []
+    for i in range(args.num_images):
+        img_p = results_dir_obj / f"{i}.png"
+        if img_p.is_file():
+            image_paths_to_process.append(img_p)
+        else:
+            per_image_scores_dict[f"{i}.png"] = None
+
+    if not image_paths_to_process and args.num_images > 0:
+        save_cache_heavy(
+            cache_file,
+            {"average": None, "per_image": per_image_scores_dict, "count": 0},
+            current_gt_mtime,
+            current_mask_mtime,
+            CACHE_VERSION,
+        )
+        print("FINAL_SCORE:ERROR")
+        sys.exit(0)
+
+    for result_img_path_obj in tqdm(
+        image_paths_to_process,
+        desc=f"LPIPS Processing {current_results_dir_name}",
+        leave=False,
+        disable=not sys.stdout.isatty(),
+    ):
+        try:
+            gen_image_bgr = cv2.imread(str(result_img_path_obj))
+            if gen_image_bgr is None:
+                per_image_scores_dict[result_img_path_obj.name] = None
+                continue
+
+            gen_image_rgb = cv2.cvtColor(gen_image_bgr, cv2.COLOR_BGR2RGB)
+            gen_image_resized_rgb = cv2.resize(
+                gen_image_rgb, LPIPS_TARGET_SIZE, interpolation=cv2.INTER_LINEAR
+            )
+
+            gen_tensor_chw_01 = img_to_tensor_heavy(gen_image_resized_rgb)
+            gen_tensor_norm_bchw = (
+                normalize_tensor_heavy(gen_tensor_chw_01).unsqueeze(0).to(heavy_device)
+            )
+
+            lpips_value = calculate_lpips_masked_heavy(
+                gt_tensor_norm_bchw, gen_tensor_norm_bchw, mask_tensor_b1hw
+            )
+
+            if lpips_value is not None:
+                total_lpips_val += lpips_value
+                per_image_scores_dict[result_img_path_obj.name] = lpips_value
+                valid_image_count_val += 1
+            else:
+                per_image_scores_dict[result_img_path_obj.name] = None
+        except Exception:  # Catch errors during individual image processing
+            per_image_scores_dict[result_img_path_obj.name] = None
+
+    if valid_image_count_val > 0:
+        final_average_score = total_lpips_val / valid_image_count_val
+        cache_data_to_save = {
+            "average": final_average_score,
+            "per_image": per_image_scores_dict,
+            "count": valid_image_count_val,
+        }
+        save_cache_heavy(
+            cache_file, cache_data_to_save, current_gt_mtime, current_mask_mtime, CACHE_VERSION
+        )
     else:
-        print(f"\nFailed to calculate Masked LPIPS for {Path(args.results_dir).name}")
+        save_cache_heavy(
+            cache_file,
+            {"average": None, "per_image": per_image_scores_dict, "count": 0},
+            current_gt_mtime,
+            current_mask_mtime,
+            CACHE_VERSION,
+        )
+
+    if final_average_score is not None:
+        # Lower LPIPS is better.
+        print(f"FINAL_SCORE:{final_average_score:.8f}")
+    else:
         print("FINAL_SCORE:ERROR")

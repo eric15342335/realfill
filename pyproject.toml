@@ -41,6 +41,9 @@ benchmark = [
 line-length = 100
 skip-magic-trailing-comma = true
 
+[tool.isort]
+profile = "black"
+
 [dependency-groups]
 dev = [
     "black[jupyter]>=25.1.0",
