@@ -11,7 +11,6 @@ from pathlib import Path
 import numpy as np
 import torch
 import torch.nn.functional as F
-import torch.utils.checkpoint
 import transformers
 from accelerate import Accelerator
 from accelerate.logging import get_logger
@@ -384,19 +383,19 @@ def parse_args(input_args=None):
     parser.add_argument(
         "--lora_rank",
         type=int,
-        default=8, 
+        default=8,
         help=("The dimension of the LoRA update matrices."),
     )
     parser.add_argument(
         "--lora_alpha",
         type=int,
-        default=18, 
+        default=18,
         help=("The alpha constant of the LoRA update matrices."),
     )
     parser.add_argument(
         "--lora_dropout",
         type=float,
-        default=0.0, 
+        default=0.0,
         help="The dropout rate of the LoRA update matrices.",
     )
     parser.add_argument(
@@ -404,6 +403,12 @@ def parse_args(input_args=None):
         type=str,
         default="none",
         help="The bias type of the Lora update matrices. Must be 'none', 'all' or 'lora_only'.",
+    )
+    parser.add_argument(
+        "--pad_to_full_batch",
+        action="store_true",
+        default=False,
+        help="If set, the training dataset will be padded by repeating some samples to ensure all batches are full."
     )
 
     if input_args is not None:
@@ -428,7 +433,9 @@ class RealFillDataset(Dataset):
         self,
         train_data_root,
         tokenizer,
+        train_batch_size,
         size=512,
+        pad_to_full_batch=False,
     ):
         self.size = size
         self.tokenizer = tokenizer
@@ -439,7 +446,19 @@ class RealFillDataset(Dataset):
         if not (self.ref_data_root.exists() and self.target_image.exists() and self.target_mask.exists()):
             raise ValueError("Train images root doesn't exist.")
 
-        self.train_images_path = list(self.ref_data_root.iterdir()) + [self.target_image]
+        self._original_train_images_path = list(self.ref_data_root.iterdir()) + [self.target_image]
+        self.train_images_path = list(self._original_train_images_path)
+
+        if pad_to_full_batch:
+            num_original_images = len(self._original_train_images_path)
+            if num_original_images > 0 and train_batch_size > 0:
+                remainder = num_original_images % train_batch_size
+                if remainder != 0:
+                    num_to_add = train_batch_size - remainder
+                    indices_to_add_from_original = random.choices(range(num_original_images), k=num_to_add)
+                    paths_to_add = [self._original_train_images_path[i] for i in indices_to_add_from_original]
+                    self.train_images_path.extend(paths_to_add)
+
         self.num_train_images = len(self.train_images_path)
         self.train_prompt = "a photo of sks"
 
@@ -459,13 +478,16 @@ class RealFillDataset(Dataset):
     def __getitem__(self, index):
         example = {}
 
-        image = Image.open(self.train_images_path[index])
+        current_image_path = self.train_images_path[index]
+        image = Image.open(current_image_path)
         image = exif_transpose(image)
 
         if not image.mode == "RGB":
             image = image.convert("RGB")
 
-        if index < len(self) - 1:
+        is_target_image_instance = (current_image_path == self.target_image)
+
+        if not is_target_image_instance:
             weighting = Image.new("L", image.size)
         else:
             weighting = Image.open(self.target_mask)
@@ -474,7 +496,7 @@ class RealFillDataset(Dataset):
         image, weighting = self.transform(image, weighting) # The range of weighting becomes [-1, 1] after self.transform
         example["images"], example["weightings"] = image, weighting[0:1] < 0
 
-        if index == len(self) - 1:
+        if is_target_image_instance:
             example["masks"] = 1 - (example["weightings"]).float()
         elif random.random() < 0.1:
             example["masks"] = torch.ones_like(example["images"][0:1])
@@ -698,7 +720,9 @@ def main(args):
     train_dataset = RealFillDataset(
         train_data_root=args.train_data_dir,
         tokenizer=tokenizer,
+        train_batch_size=args.train_batch_size,
         size=args.resolution,
+        pad_to_full_batch=args.pad_to_full_batch,
     )
 
     train_dataloader = torch.utils.data.DataLoader(
@@ -899,7 +923,7 @@ def main(args):
                     if global_step % args.validation_steps == 0:
                         unet.eval()
                         text_encoder.eval()
-                        
+
                         log_validation(
                             text_encoder,
                             tokenizer,

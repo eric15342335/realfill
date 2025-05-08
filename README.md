@@ -188,6 +188,14 @@ Training RealFill typically requires significant VRAM. To successfully run fine-
       --num_validation_images 4 `# Generate 4 validation images`
     ```
 
+    Some options worth considering:
+
+  * `--gradient_checkpointing`: Enable gradient checkpointing to *save memory* at the *cost of speed*. This is useful if you trying to run on a GPU with less VRAM than Google Colab T4 (16GB).
+  * `--allow_tf32`: Enable TensorFloat-32 (TF32) for NVIDIA Ampere GPUs (e.g., A100, RTX 30/40 series). This can improve performance but is not available on all GPUs.
+  * `--mixed_precision=bf16`: Use Brain Float 16 (BF16) precision if supported by your hardware. This is generally faster than FP16 but requires specific GPU support (e.g., A100, H100). Google Colab T4 does not support BF16.
+
+    Note that by default `--train_batch_size` has no effect if the number is larger than the number of available images in the training set (reference & target images). If you have access to hardware with more VRAM, you can consider using `--pad_to_full_batch` to pad the input batch to the full batch size.
+
 #### Monitoring Training with TensorBoard 📊
 
 Monitoring the training process is crucial, especially to see how well the model is learning to inpaint the target region during fine-tuning. We incorporated TensorBoard logging for this purpose.
