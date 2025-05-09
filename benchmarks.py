@@ -1864,7 +1864,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--loftr_script_path",
         type=str,
-        default="benchmark/loftr_ranking.py",
+        default="loftr_ranking.py",
         help="Path to the 'loftr_ranking.py' script, relative to this benchmark script's location.",
     )
 
