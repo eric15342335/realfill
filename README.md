@@ -159,7 +159,7 @@ Training RealFill typically requires significant VRAM. To successfully run fine-
     # --- Set Environment Variables ---
     export MODEL_NAME="stabilityai/stable-diffusion-2-inpainting"
     export BENCHMARK="RealBench"
-    export DATASET_NUMBER=23
+    export DATASET_NUMBER=24
     export TRAIN_DIR="realfill_data_release_full/$BENCHMARK/$DATASET_NUMBER"
     export OUTPUT_DIR="$BENCHMARK-$DATASET_NUMBER-model" # Example output dir
 
@@ -169,9 +169,9 @@ Training RealFill typically requires significant VRAM. To successfully run fine-
       --train_data_dir=$TRAIN_DIR \
       --output_dir=$OUTPUT_DIR \
       --resolution=512 \
-      --train_batch_size=16 \
-      --gradient_accumulation_steps=1 \
+      --train_batch_size=1 \
       --use_8bit_adam `# Use 8-bit Adam` \
+      --gradient_accumulation_steps=1 \
       --enable_xformers_memory_efficient_attention `# Use xFormers` \
       --set_grads_to_none `# Set Grads to None` \
       --unet_learning_rate=2e-4 \
@@ -179,15 +179,18 @@ Training RealFill typically requires significant VRAM. To successfully run fine-
       --lr_scheduler="constant" \
       --lr_warmup_steps=100 \
       --max_train_steps=2000 \
-      --lora_rank=8 \
-      --lora_dropout=0.1 \
-      --lora_alpha=16 \
-      --mixed_precision=fp16 `# Explicitly set mixed precision` \
+      --lora_rank=4 \
+      --lora_dropout=0 \
+      --lora_alpha=4 \
+      --mixed_precision=bf16 `# Explicitly set mixed precision` \
       --resume_from_checkpoint="latest" `# Resume if checkpoints exist` \
       --report_to tensorboard `# Enable TensorBoard logging` \
       --checkpointing_steps 200 `# Save checkpoint every 200 steps` \
       --validation_steps 100 `# Run validation every 100 steps` \
-      --num_validation_images 4 `# Generate 4 validation images`
+      --num_validation_images 2 \
+      --gradient_checkpointing \
+      --checkpoints_total_limit 3 \
+      --allow_tf32
     ```
 
     Some options worth considering:

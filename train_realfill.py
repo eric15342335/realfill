@@ -764,11 +764,25 @@ def main(args):
     else:
         optimizer_class = torch.optim.AdamW
 
-    # Optimizer creation
+    # Add this new class before the optimizer creation
+    class CombinedModel(torch.nn.Module):
+        def __init__(self, unet, text_encoder):
+            super().__init__()
+            self.unet = unet
+            self.text_encoder = text_encoder
+
+        def forward(self, inputs, timesteps, input_ids):
+            # Text encoder processes input_ids to get encoder_hidden_states
+            encoder_hidden_states = self.text_encoder(input_ids)[0]
+            # UNet processes inputs, timesteps, and encoder_hidden_states
+            model_pred = self.unet(inputs, timesteps, encoder_hidden_states).sample
+            return model_pred
+
+    # Optimizer creation (modified)
     optimizer = optimizer_class(
         [
-            {"params": unet.parameters(), "lr": args.unet_learning_rate},
-            {"params": text_encoder.parameters(), "lr": args.text_encoder_learning_rate},
+            {"params": CombinedModel(unet, text_encoder).unet.parameters(), "lr": args.unet_learning_rate},
+            {"params": CombinedModel(unet, text_encoder).text_encoder.parameters(), "lr": args.text_encoder_learning_rate},
         ],
         betas=(args.adam_beta1, args.adam_beta2),
         weight_decay=args.adam_weight_decay,
@@ -808,10 +822,11 @@ def main(args):
         power=args.lr_power,
     )
 
-    # Prepare everything with our `accelerator`.
-    unet, text_encoder, optimizer, train_dataloader = accelerator.prepare(
-        unet, text_encoder, optimizer, train_dataloader
-    )
+    # Prepare everything with our `accelerator`. (modified)
+    combined_model = CombinedModel(unet, text_encoder)  # Create combined model
+    combined_model, optimizer, train_dataloader = accelerator.prepare(
+        combined_model, optimizer, train_dataloader
+    )  # Prepare combined model
 
     # For mixed precision training we cast all non-trainable weigths (vae, non-lora text_encoder and non-lora unet) to half-precision
     # as these weights are only used for inference, keeping weights in full precision is not required.
@@ -891,11 +906,10 @@ def main(args):
     )
 
     for epoch in range(first_epoch, args.num_train_epochs):
-        unet.train()
-        text_encoder.train()
+        combined_model.train()  # Modified: Train combined_model
 
         for step, batch in enumerate(train_dataloader):
-            with accelerator.accumulate(unet, text_encoder):
+            with accelerator.accumulate(combined_model):  # Modified: Accumulate on combined_model
                 # Convert images to latent space
                 latents = vae.encode(batch["images"].to(dtype=weight_dtype)).latent_dist.sample()
                 latents = latents * 0.18215
@@ -924,17 +938,13 @@ def main(args):
                 timesteps = timesteps.long()
 
                 # Add noise to the latents according to the noise magnitude at each timestep
-                # (this is the forward diffusion process)
                 noisy_latents = noise_scheduler.add_noise(latents, noise, timesteps)
 
                 # Concatenate noisy latents, masks and conditionings to get inputs to unet
                 inputs = torch.cat([noisy_latents, masks, conditionings], dim=1)
 
-                # Get the text embedding for conditioning
-                encoder_hidden_states = text_encoder(batch["input_ids"])[0]
-
-                # Predict the noise residual
-                model_pred = unet(inputs, timesteps, encoder_hidden_states).sample
+                # Predict the noise residual (modified: Use combined_model)
+                model_pred = combined_model(inputs, timesteps, batch["input_ids"])
 
                 # Compute the diffusion loss
                 assert noise_scheduler.config.prediction_type == "epsilon"
@@ -945,7 +955,7 @@ def main(args):
                 # Backpropagate
                 accelerator.backward(loss)
                 if accelerator.sync_gradients:
-                    params_to_clip = itertools.chain(unet.parameters(), text_encoder.parameters())
+                    params_to_clip = combined_model.parameters()  # Modified: Clip combined_model parameters
                     accelerator.clip_grad_norm_(params_to_clip, args.max_grad_norm)
 
                 optimizer.step()
@@ -989,19 +999,18 @@ def main(args):
                         accelerator.save_state(save_path)
                         logger.info(f"Saved state to {save_path}")
 
-                    if global_step % args.validation_steps == 0:
-                        unet.eval()
-                        text_encoder.eval()
+                        if global_step % args.validation_steps == 0:
+                            combined_model.eval()  # Modified: Eval combined_model
 
-                        log_validation(
-                            text_encoder,
-                            tokenizer,
-                            unet,
-                            args,
-                            accelerator,
-                            weight_dtype,
-                            global_step,
-                        )
+                            log_validation(
+                                combined_model.text_encoder,  # Modified: Extract text_encoder
+                                tokenizer,
+                                combined_model.unet,  # Modified: Extract unet
+                                args,
+                                accelerator,
+                                weight_dtype,
+                                global_step,
+                            )
 
             logs = {"loss": loss.detach().item()}
             progress_bar.set_postfix(**logs)
@@ -1010,38 +1019,28 @@ def main(args):
             if global_step >= args.max_train_steps:
                 break
 
-    # Save the lora layers
+    # Save the lora layers (modified)
     accelerator.wait_for_everyone()
     if accelerator.is_main_process:
         pipeline = StableDiffusionInpaintPipeline.from_pretrained(
             args.pretrained_model_name_or_path,
-            unet=accelerator.unwrap_model(unet, keep_fp32_wrapper=True).merge_and_unload(),
-            text_encoder=accelerator.unwrap_model(
-                text_encoder, keep_fp32_wrapper=True
-            ).merge_and_unload(),
+            unet=accelerator.unwrap_model(combined_model.unet, keep_fp32_wrapper=True).merge_and_unload(),  # Modified: Extract unet
+            text_encoder=accelerator.unwrap_model(combined_model.text_encoder, keep_fp32_wrapper=True).merge_and_unload(),  # Modified: Extract text_encoder
             revision=args.revision,
         )
 
         pipeline.save_pretrained(args.output_dir)
 
-        # Final inference
+        # Final inference (modified)
         images = log_validation(
-            text_encoder, tokenizer, unet, args, accelerator, weight_dtype, global_step
+            combined_model.text_encoder,  # Modified: Extract text_encoder
+            tokenizer,
+            combined_model.unet,  # Modified: Extract unet
+            args,
+            accelerator,
+            weight_dtype,
+            global_step
         )
-
-        if args.push_to_hub:
-            save_model_card(
-                repo_id,
-                images=images,
-                base_model=args.pretrained_model_name_or_path,
-                repo_folder=args.output_dir,
-            )
-            upload_folder(
-                repo_id=repo_id,
-                folder_path=args.output_dir,
-                commit_message="End of training",
-                ignore_patterns=["step_*", "epoch_*"],
-            )
 
     accelerator.end_training()
 
