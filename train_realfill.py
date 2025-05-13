@@ -1,6 +1,5 @@
 import argparse
 import copy
-import itertools
 import logging
 import math
 import os
@@ -95,7 +94,7 @@ def log_validation(text_encoder, tokenizer, unet, args, accelerator, weight_dtyp
 
     # create pipeline (note: unet and vae are loaded again in float32)
     pipeline = StableDiffusionInpaintPipeline.from_pretrained(
-        args.pretrained_model_name_or_path, tokenizer=tokenizer, revision=args.revision
+        args.pretrained_model_name_or_path, tokenizer=tokenizer, revision=args.revision, torch_dtype=weight_dtype
     )
 
     # set `keep_fp32_wrapper` to True because we do not want to remove
@@ -728,8 +727,8 @@ def main(args):
             model.load_state_dict(load_model.state_dict())
             del load_model
 
-    accelerator.register_save_state_pre_hook(save_model_hook)
-    accelerator.register_load_state_pre_hook(load_model_hook)
+    #accelerator.register_save_state_pre_hook(save_model_hook)
+    #accelerator.register_load_state_pre_hook(load_model_hook)
 
     # Enable TF32 for faster training on Ampere GPUs,
     # cf https://pytorch.org/docs/stable/notes/cuda.html#tensorfloat-32-tf32-on-ampere-devices
@@ -908,6 +907,7 @@ def main(args):
     for epoch in range(first_epoch, args.num_train_epochs):
         combined_model.train()  # Modified: Train combined_model
 
+        torch.compiler.cudagraph_mark_step_begin()  # Start recording the graph
         for step, batch in enumerate(train_dataloader):
             with accelerator.accumulate(combined_model):  # Modified: Accumulate on combined_model
                 # Convert images to latent space

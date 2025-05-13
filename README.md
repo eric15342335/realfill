@@ -152,7 +152,7 @@ Training RealFill typically requires significant VRAM. To successfully run fine-
 3. **xFormers:** Enable memory-efficient attention mechanisms with `--enable_xformers_memory_efficient_attention`. Requires `xformers`.
 4. **Set Grads to None:** Further reduce memory by setting gradients to `None` instead of zeroing them using `--set_grads_to_none`.
 
-* **Example Command (Adapted from our Colab Setup for RealBench Scene 23):**
+* **Example Command (Adapted from our Colab Setup for RealBench Scene 24):**
     This command incorporates the necessary flags for low-memory training and includes monitoring/checkpointing flags (see next section).
 
     ```bash
@@ -170,25 +170,24 @@ Training RealFill typically requires significant VRAM. To successfully run fine-
       --output_dir=$OUTPUT_DIR \
       --resolution=512 \
       --train_batch_size=1 \
-      --use_8bit_adam `# Use 8-bit Adam` \
+      --use_8bit_adam \
       --gradient_accumulation_steps=1 \
-      --enable_xformers_memory_efficient_attention `# Use xFormers` \
-      --set_grads_to_none `# Set Grads to None` \
+      --enable_xformers_memory_efficient_attention \
+      --set_grads_to_none \
       --unet_learning_rate=2e-4 \
       --text_encoder_learning_rate=4e-5 \
       --lr_scheduler="constant" \
       --lr_warmup_steps=100 \
-      --max_train_steps=2000 \
+      --max_train_steps=4000 \
       --lora_rank=4 \
       --lora_dropout=0 \
       --lora_alpha=4 \
-      --mixed_precision=bf16 `# Explicitly set mixed precision` \
-      --resume_from_checkpoint="latest" `# Resume if checkpoints exist` \
-      --report_to tensorboard `# Enable TensorBoard logging` \
-      --checkpointing_steps 200 `# Save checkpoint every 200 steps` \
-      --validation_steps 100 `# Run validation every 100 steps` \
-      --num_validation_images 2 \
-      --gradient_checkpointing \
+      --mixed_precision=bf16 \
+      --resume_from_checkpoint="latest" \
+      --report_to tensorboard \
+      --checkpointing_steps 500 \
+      --validation_steps 500 \
+      --num_validation_images 4 \
       --checkpoints_total_limit 3 \
       --allow_tf32
     ```
@@ -231,10 +230,10 @@ Monitoring the training process is crucial, especially to see how well the model
 
     ```bash
     accelerate launch infer.py \
-      --model_path="./RealBench23-model" \
-      --validation_image="./realfill_data_release_full/RealBench/23/target/target.png" \
-      --validation_mask="./realfill_data_release_full/RealBench/23/target/mask.png" \
-      --output_dir="./realfill_results/RealBench23-results"
+      --model_path="./RealBench-24-model" \
+      --validation_image="./realfill_data_release_full/RealBench/24/target/target.png" \
+      --validation_mask="./realfill_data_release_full/RealBench/24/target/mask.png" \
+      --output_dir="./realfill_results/RealBench-24-results"
     ```
 
 ### 3. Benchmarking 📈
